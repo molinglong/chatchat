@@ -1,10 +1,10 @@
 import { redirect } from 'next/navigation'
 import { auth } from '@/lib/auth'
 import { Sidebar } from '@/components/sidebar/Sidebar'
-import { TopBar } from '@/components/TopBar'
 import { SettingsModal } from '@/components/SettingsModal'
+import { TopBar } from '@/components/TopBar'
 
-export default async function ChatLayout({
+export default async function ImagesLayout({
   children,
 }: {
   children: React.ReactNode
@@ -30,4 +30,3 @@ export default async function ChatLayout({
     </div>
   )
 }
-

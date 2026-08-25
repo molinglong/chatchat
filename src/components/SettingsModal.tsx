@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter } from 'lucide-react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useChatStore } from '@/store/chat-store'
 import { StyleSlider } from '@/components/chat/StyleSlider'
@@ -31,6 +31,11 @@ interface MemoryInfo {
 }
 
 interface UsageStats {
+  chat: ChatUsageStats
+  image: ImageUsageStats
+}
+
+interface ChatUsageStats {
   totals: {
     promptTokens: number
     completionTokens: number
@@ -45,6 +50,13 @@ interface UsageStats {
     messages: number
   }[]
   byDay: { date: string; totalTokens: number }[]
+}
+
+interface ImageUsageStats {
+  totals: { count: number }
+  byModel: { model: string; count: number }[]
+  bySize: { size: string; count: number }[]
+  byDay: { date: string; count: number }[]
 }
 
 // Custom model types
@@ -118,7 +130,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'providers' | 'memory' | 'general' | 'help' | 'about' | 'customModels' | 'usage'
+type SectionId = 'overview' | 'providers' | 'memory' | 'general' | 'help' | 'about' | 'usage' | 'image'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -129,9 +141,10 @@ const THEME_OPTIONS: { value: ThemeChoice; label: string }[] = [
 ]
 
 const NAV_ITEMS: { id: SectionId; label: string; icon: typeof Key }[] = [
-  { id: 'providers', label: '服务商', icon: Key },
+  { id: 'overview', label: '总览', icon: LayoutDashboard },
+  { id: 'providers', label: '服务商 & 模型', icon: Key },
+  { id: 'image', label: '生图', icon: ImageIcon },
   { id: 'memory', label: '记忆', icon: Brain },
-  { id: 'customModels', label: '自定义模型', icon: Cpu },
   { id: 'usage', label: '用量统计', icon: BarChart3 },
   { id: 'general', label: '通用', icon: Settings2 },
   { id: 'help', label: '帮助', icon: HelpCircle },
@@ -149,6 +162,7 @@ export function SettingsModal() {
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [keys, setKeys] = useState<KeyInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false)
   const [draftKeys, setDraftKeys] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
@@ -160,7 +174,7 @@ export function SettingsModal() {
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memorySaving, setMemorySaving] = useState(false)
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null)
-  const [activeSection, setActiveSection] = useState<SectionId>('providers')
+  const [activeSection, setActiveSection] = useState<SectionId>('overview')
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>('system')
 
   // Custom model state
@@ -187,6 +201,37 @@ export function SettingsModal() {
 
   // Usage stats state
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
+  const [usageTab, setUsageTab] = useState<'chat' | 'image'>('chat')
+  const [usageRefreshing, setUsageRefreshing] = useState(false)
+
+  // Image generation settings state
+  const [imageModel, setImageModel] = useState('builtin:wanx2.1-t2i-turbo')
+  const [imageSize, setImageSize] = useState('1024*1024')
+  const [imageSizeSaving, setImageSizeSaving] = useState(false)
+  const [imageBuiltinModels, setImageBuiltinModels] = useState<Record<string, unknown>[]>([])
+  const [imageCustomModels, setImageCustomModels] = useState<Record<string, unknown>[]>([])
+  const [imageCmForm, setImageCmForm] = useState({ name: '', modelId: '', baseURL: '', apiKeySource: 'provider', apiKey: '', keyProvider: '', supportsSize: true })
+  const [imageCmSaving, setImageCmSaving] = useState(false)
+  const [imageCmDeleting, setImageCmDeleting] = useState<string | null>(null)
+  const [imageFormOpen, setImageFormOpen] = useState(false)
+  const [editingImageModelId, setEditingImageModelId] = useState<string | null>(null)
+  const [cmFormOpen, setCmFormOpen] = useState(false)
+
+  // 生图设置自动保存：模型 + 尺寸变化时 PATCH
+  const imageSettingsLoadedRef = useRef(false)
+  const imageSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingImageSettingsRef = useRef<{ imageModel?: string; imageSize?: string }>({})
+
+  // 用量统计刷新
+  const loadUsageStats = useCallback(async () => {
+    setUsageRefreshing(true)
+    try {
+      const res = await fetch('/api/usage').then((r) => r.json()).catch(() => null)
+      if (res?.chat && res?.image) setUsageStats(res)
+    } finally {
+      setUsageRefreshing(false)
+    }
+  }, [])
 
   // Provider section collapse states and display filter
   const [configuredCollapsed, setConfiguredCollapsed] = useState(false)
@@ -202,14 +247,15 @@ export function SettingsModal() {
       fetch('/api/keys').then((r) => r.json()),
       fetch('/api/memories').then((r) => r.json()),
       fetch('/api/custom-models').then((r) => r.json()),
+      fetch('/api/image-settings').then((r) => r.json()).catch(() => null),
       fetch('/api/usage').then((r) => r.json()).catch(() => null),
     ])
-      .then(([provs, keyList, memoryData, cmList, usageData]) => {
+      .then(([provs, keyList, memoryData, cmList, imgSettings, usageData]) => {
         setProviders(provs)
         setKeys(keyList)
         setMemories(memoryData?.memories ?? [])
         setMemoryEnabled(memoryData?.memoryEnabled ?? true)
-        setUsageStats(usageData?.totals ? usageData : null)
+        setUsageStats(usageData?.chat && usageData?.image ? usageData : null)
         // Parse custom models: assume cmList is already ModelDefinition format from API
         if (Array.isArray(cmList)) {
           setCustomModels(
@@ -219,9 +265,23 @@ export function SettingsModal() {
             }))
           )
         }
+        // Load image settings
+        if (imgSettings && typeof imgSettings === 'object') {
+          if (imgSettings.settings) {
+            if (imgSettings.settings.imageModel) setImageModel(imgSettings.settings.imageModel as string)
+            if (imgSettings.settings.imageSize) setImageSize(imgSettings.settings.imageSize as string)
+          }
+          if (Array.isArray(imgSettings.builtinModels)) setImageBuiltinModels(imgSettings.builtinModels)
+          if (Array.isArray(imgSettings.customModels)) setImageCustomModels(imgSettings.customModels)
+        }
       })
       .catch(() => setMessage({ type: 'error', text: '加载数据失败' }))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        setLoading(false)
+        setInitialLoadComplete(true)
+        // 加载完成后再开启自动保存 effect（避免初次 setImage* 触发 PATCH）
+        setTimeout(() => { imageSettingsLoadedRef.current = true }, 0)
+      })
   }, [settingsOpen])
 
   // Close on Escape
@@ -249,6 +309,49 @@ export function SettingsModal() {
     const stored = localStorage.getItem('theme')
     setThemeChoice(stored === 'light' || stored === 'dark' ? stored : 'system')
   }, [])
+
+  // 生图设置自动保存：模型 + 尺寸变化时 PATCH
+  useEffect(() => {
+    if (!imageSettingsLoadedRef.current) return
+    pendingImageSettingsRef.current = { ...pendingImageSettingsRef.current, imageModel }
+    if (imageSaveTimerRef.current) clearTimeout(imageSaveTimerRef.current)
+    imageSaveTimerRef.current = setTimeout(async () => {
+      setImageSizeSaving(true)
+      try {
+        await fetch('/api/image-settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: pendingImageSettingsRef.current }),
+        })
+      } finally {
+        setImageSizeSaving(false)
+      }
+    }, 400)
+    return () => {
+      if (imageSaveTimerRef.current) clearTimeout(imageSaveTimerRef.current)
+    }
+  }, [imageModel])
+
+  useEffect(() => {
+    if (!imageSettingsLoadedRef.current) return
+    pendingImageSettingsRef.current = { ...pendingImageSettingsRef.current, imageSize }
+    if (imageSaveTimerRef.current) clearTimeout(imageSaveTimerRef.current)
+    imageSaveTimerRef.current = setTimeout(async () => {
+      setImageSizeSaving(true)
+      try {
+        await fetch('/api/image-settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: pendingImageSettingsRef.current }),
+        })
+      } finally {
+        setImageSizeSaving(false)
+      }
+    }, 400)
+    return () => {
+      if (imageSaveTimerRef.current) clearTimeout(imageSaveTimerRef.current)
+    }
+  }, [imageSize])
 
   function applyTheme(choice: ThemeChoice) {
     setThemeChoice(choice)
@@ -401,6 +504,79 @@ export function SettingsModal() {
     }
   }
 
+  async function handleSaveImageModel() {
+    const { name, modelId, baseURL, apiKeySource, apiKey, keyProvider, supportsSize } = imageCmForm
+    if (!name.trim() || !modelId.trim() || !baseURL.trim()) {
+      setMessage({ type: 'error', text: '名称、模型 ID 和 Base URL 为必填项' })
+      return
+    }
+    setImageCmSaving(true)
+    try {
+      const body: Record<string, unknown> = {
+        name: name.trim(),
+        modelId: modelId.trim(),
+        baseURL: baseURL.trim(),
+        apiKeySource,
+        apiKey: apiKeySource === 'own' ? apiKey : '',
+        keyProvider: apiKeySource === 'provider' ? keyProvider : '',
+        supportsSize,
+      }
+      if (editingImageModelId) {
+        body.action = 'update'
+        body.id = editingImageModelId
+      } else {
+        body.action = 'add'
+      }
+      const res = await fetch('/api/image-settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customModel: body }),
+      })
+      if (!res.ok) throw new Error(editingImageModelId ? '更新失败' : '添加失败')
+      const data = await res.json()
+      const finalId = editingImageModelId || data.id
+      const next = { id: finalId, name: name.trim(), modelId: modelId.trim(), baseURL: baseURL.trim(), provider: 'custom', apiKeySource, keyProvider, supportsSize }
+      if (editingImageModelId) {
+        setImageCustomModels((prev) => prev.map((m) => (m.id === editingImageModelId ? next : m)))
+        setMessage({ type: 'success', text: '自定义模型已更新' })
+      } else {
+        setImageCustomModels((prev) => [...prev, next])
+        setMessage({ type: 'success', text: '自定义模型已添加' })
+      }
+      setImageCmForm({ name: '', modelId: '', baseURL: '', apiKeySource: 'provider', apiKey: '', keyProvider: '', supportsSize: true })
+      setEditingImageModelId(null)
+      setImageFormOpen(false)
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : '操作失败' })
+    } finally {
+      setImageCmSaving(false)
+    }
+  }
+
+  async function handleDeleteImageModel(id: string) {
+    if (!confirm('确定要删除此自定义模型吗？')) return
+    setImageCmDeleting(id)
+    try {
+      await fetch('/api/image-settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customModel: { action: 'delete', id } }),
+      })
+      setImageCustomModels((prev) => prev.filter((m) => m.id !== id))
+      if (imageModel === id) setImageModel('builtin:wanx2.1-t2i-turbo')
+      if (editingImageModelId === id) {
+        setEditingImageModelId(null)
+        setImageFormOpen(false)
+        setImageCmForm({ name: '', modelId: '', baseURL: '', apiKeySource: 'provider', apiKey: '', keyProvider: '', supportsSize: true })
+      }
+      setMessage({ type: 'success', text: '模型已删除' })
+    } catch {
+      setMessage({ type: 'error', text: '删除失败' })
+    } finally {
+      setImageCmDeleting(null)
+    }
+  }
+
   // Custom model handlers
   function applyPreset(preset: typeof CUSTOM_MODEL_PRESETS[number]) {
     setCmForm((f) => ({ ...f, baseURL: preset.baseURL }))
@@ -468,7 +644,7 @@ export function SettingsModal() {
     }
   }
 
-  async function handleCmTest(id?: string) {
+  async function handleCmTest(id?: string, autoDetect = false) {
     const targetId = id || `${Date.now()}` // temp id for testing draft
     setCmTesting(targetId)
     setCmFormResult(null)
@@ -478,17 +654,41 @@ export function SettingsModal() {
       return next
     })
     try {
-      const body = id ? { id } : {
-        ...cmForm,
-        keyProvider: cmForm.keySource === 'provider' ? cmForm.provider : undefined,
-        apiKey: cmForm.keySource === 'own' ? cmForm.apiKey : '',
+      const body = {
+        ...(id ? { id } : {
+          ...cmForm,
+          keyProvider: cmForm.keySource === 'provider' ? cmForm.provider : undefined,
+          apiKey: cmForm.keySource === 'own' ? cmForm.apiKey : '',
+        }),
+        detectCapabilities: autoDetect,
       }
       const res = await fetch('/api/custom-models/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      const json = await res.json().catch(() => ({})) as { ok?: boolean; error?: string }
+      const json = await res.json().catch(() => ({})) as {
+        ok?: boolean
+        error?: string
+        capabilities?: { supportsVision: boolean; supportsReasoning: boolean }
+      }
       if (json.ok) {
         setCmTestResult((r) => ({ ...r, [targetId]: 'success' }))
         setCmFormResult('success')
-        setMessage({ type: 'success', text: '连接测试成功' })
+        // 自动应用检测到的能力
+        if (json.capabilities && autoDetect) {
+          setCmForm((f) => ({
+            ...f,
+            supportsVision: json.capabilities!.supportsVision,
+            supportsReasoning: json.capabilities!.supportsReasoning,
+          }))
+          const detected: string[] = []
+          if (json.capabilities.supportsVision) detected.push('视觉')
+          if (json.capabilities.supportsReasoning) detected.push('推理')
+          if (detected.length > 0) {
+            setMessage({ type: 'success', text: `连接成功，已自动启用：${detected.join('、')}` })
+          } else {
+            setMessage({ type: 'success', text: '连接成功，未检测到额外能力' })
+          }
+        } else {
+          setMessage({ type: 'success', text: '连接测试成功' })
+        }
       } else {
         setCmTestResult((r) => ({ ...r, [targetId]: 'error' }))
         setCmFormResult('error')
@@ -519,6 +719,7 @@ export function SettingsModal() {
       supportsReasoning: model.supportsReasoning,
     })
     setCmFormResult(null)
+    setCmFormOpen(true)
   }
 
   if (!settingsOpen) return null
@@ -739,35 +940,459 @@ export function SettingsModal() {
 
           {/* Content */}
           <div className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden px-4 py-3">
-            {loading ? (
+            {/* Toast message */}
+            {message && (
+              <div
+                className={cn(
+                  'mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2',
+                  message.type === 'success'
+                    ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200/60 dark:border-green-800/60'
+                    : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200/60 dark:border-red-800/60'
+                )}
+              >
+                {message.type === 'success' ? (
+                  <CheckCircle className="w-4 h-4 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                )}
+                {message.text}
+              </div>
+            )}
+
+            {/* Section title */}
+            <h3 className="text-sm font-semibold text-content-primary mb-2.5 text-left">
+              {sectionTitle}
+            </h3>
+
+            {/* 总览 - 始终显示，不需要等 loading */}
+            {activeSection === 'overview' && (
+              <div className="space-y-3">
+                {/* 欢迎卡片 */}
+                <div className="rounded-xl border border-line/60 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent px-4 py-3.5">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
+                      <Sparkles className="w-5 h-5 text-accent" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-content-primary">欢迎使用八号产房</p>
+                      <p className="text-[11px] text-content-muted mt-0.5 leading-relaxed">
+                        在这里管理你的 AI 服务商、记忆设置和用量统计
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 快捷状态卡片 */}
+                <div className="grid grid-cols-2 gap-2">
+                  {/* 服务商状态 */}
+                  <button
+                    onClick={() => setActiveSection('providers')}
+                    className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Key className="w-4 h-4 text-accent" />
+                      <span className={cn(
+                        'text-[10px] px-1.5 py-0.5 rounded-full font-mono',
+                        keys.length > 0 
+                          ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' 
+                          : 'bg-surface-subtle text-content-muted'
+                      )}>
+                        {keys.length} 个
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-content-primary">服务商</p>
+                    <p className="text-[10px] text-content-muted mt-0.5 truncate">
+                      {keys.length > 0 ? '已配置 API Key' : '点击配置'}
+                    </p>
+                  </button>
+
+                  {/* 记忆状态 */}
+                  <button
+                    onClick={() => setActiveSection('memory')}
+                    className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Brain className="w-4 h-4 text-purple-500" />
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-mono bg-surface-subtle text-content-muted">
+                        {memories.length} 条
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-content-primary">记忆</p>
+                    <p className="text-[10px] text-content-muted mt-0.5 truncate">
+                      {memoryEnabled ? '已开启' : '已关闭'}
+                    </p>
+                  </button>
+
+                  {/* 用量统计 */}
+                  <button
+                    onClick={() => setActiveSection('usage')}
+                    className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <BarChart3 className="w-4 h-4 text-emerald-500" />
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-mono bg-surface-subtle text-content-muted">
+                        {loading ? '...' : (usageStats ? usageStats.chat.totals.totalTokens.toLocaleString() : '0')}
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-content-primary">用量统计</p>
+                    <p className="text-[10px] text-content-muted mt-0.5 truncate">
+                      Token 消耗
+                    </p>
+                  </button>
+
+                  {/* 主题 */}
+                  <button
+                    onClick={() => setActiveSection('general')}
+                    className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5 text-left hover:bg-surface-subtle/40 transition-colors group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <Settings2 className="w-4 h-4 text-amber-500" />
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-mono bg-surface-subtle text-content-muted">
+                        {themeChoice === 'light' ? '浅色' : themeChoice === 'dark' ? '深色' : '系统'}
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-content-primary">外观</p>
+                    <p className="text-[10px] text-content-muted mt-0.5 truncate">
+                      主题设置
+                    </p>
+                  </button>
+                </div>
+
+                {/* 快速操作 */}
+                <div className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5">
+                  <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">快速操作</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      onClick={() => setActiveSection('providers')}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3 h-3" /> 添加服务商
+                    </button>
+                    <button
+                      onClick={() => setActiveSection('providers')}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                    >
+                      <Cpu className="w-3 h-3" /> 自定义模型
+                    </button>
+                    <button
+                      onClick={() => setActiveSection('memory')}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                    >
+                      <Brain className="w-3 h-3" /> 管理记忆
+                    </button>
+                    <button
+                      onClick={() => setActiveSection('usage')}
+                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                    >
+                      <BarChart3 className="w-3 h-3" /> 查看用量
+                    </button>
+                  </div>
+                </div>
+
+                {/* 当前对话风格 */}
+                <div className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[11px] font-medium text-content-secondary">当前对话风格</p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-1.5 rounded-full bg-surface-muted overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-accent/70"
+                        style={{ width: `${conversationStyleOffset}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-content-muted font-mono shrink-0">
+                      {conversationStyleOffset}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-content-muted mt-1 text-left">
+                    {getStyleLabel(conversationStyleOffset)}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* 其他需要数据的页面 - 显示 loading */}
+            {activeSection !== 'overview' && loading && (
               <div className="flex items-center justify-center py-16">
                 <Loader2 className="w-5 h-5 animate-spin text-content-muted" />
               </div>
-            ) : (
+            )}
+
+            {/* 其他页面内容 */}
+            {activeSection !== 'overview' && !loading && (
               <>
-                {/* Toast message */}
-                {message && (
-                  <div
-                    className={cn(
-                      'mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2',
-                      message.type === 'success'
-                        ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200/60 dark:border-green-800/60'
-                        : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200/60 dark:border-red-800/60'
+                {/* 生图 */}
+                {activeSection === 'image' && (
+                  <div className="space-y-3">
+                    {/* 内置模型 */}
+                    {imageBuiltinModels.length > 0 && (
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-medium text-content-secondary text-left">内置模型</p>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-subtle/80 text-content-muted font-mono shrink-0">
+                            {imageBuiltinModels.length}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {imageBuiltinModels.map((m: Record<string, unknown>) => (
+                            <button
+                              key={m.id as string}
+                              onClick={() => setImageModel(m.id as string)}
+                              className={cn(
+                                'relative px-3 py-2.5 rounded-xl border text-left transition-all',
+                                imageModel === m.id
+                                  ? 'border-accent bg-accent/10 ring-2 ring-accent/20'
+                                  : 'border-line/60 bg-surface-muted/60 hover:border-line-strong'
+                              )}
+                            >
+                              {imageModel === m.id && (
+                                <Check className="absolute top-1.5 right-1.5 w-3 h-3 text-accent" />
+                              )}
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <p className="text-xs font-medium text-content-primary">{m.name as string}</p>
+                                {(m as { badge?: string }).badge && (
+                                  <span className="text-[9px] px-1 py-0.5 rounded bg-accent-soft text-content-muted">
+                                    {(m as { badge?: string }).badge}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-content-muted">{(m as { desc?: string }).desc}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
-                  >
-                    {message.type === 'success' ? (
-                      <CheckCircle className="w-4 h-4 shrink-0" />
-                    ) : (
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                    )}
-                    {message.text}
+
+                    {/* 自定义模型 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-medium text-content-secondary text-left">我的自定义模型</p>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-subtle/80 text-content-muted font-mono shrink-0">
+                            {imageCustomModels.length}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setEditingImageModelId(null)
+                            setImageCmForm({ name: '', modelId: '', baseURL: '', apiKeySource: 'provider', apiKey: '', keyProvider: '', supportsSize: true })
+                            setImageFormOpen(true)
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+                        >
+                          <Plus className="w-3 h-3" />
+                          添加
+                        </button>
+                      </div>
+                      {imageCustomModels.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {imageCustomModels.map((m: Record<string, unknown>) => (
+                            <div
+                              key={m.id as string}
+                              className={cn(
+                                'flex items-center justify-between px-2.5 py-2 rounded-lg border transition-all',
+                                imageModel === m.id
+                                  ? 'border-accent bg-accent/10'
+                                  : 'border-line/40 bg-surface-muted/60'
+                              )}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                {imageModel === m.id ? (
+                                  <Check className="w-3.5 h-3.5 text-accent shrink-0" />
+                                ) : (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400 shrink-0" />
+                                )}
+                                <div className="min-w-0">
+                                  <p className="text-xs text-content-primary truncate">{m.name as string}</p>
+                                  <p className="text-[11px] text-content-muted truncate">
+                                    {m.modelId as string}
+                                    {m.apiKeySource === 'own' ? ' · 独立 Key' : m.keyProvider ? ` · 复用 ${m.keyProvider}` : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {imageModel !== m.id && (
+                                  <button
+                                    onClick={() => setImageModel(m.id as string)}
+                                    className="px-2 py-1 rounded-md text-[11px] font-medium bg-surface text-content-secondary hover:bg-surface-subtle transition-colors"
+                                  >
+                                    选用
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    setEditingImageModelId(m.id as string)
+                                    setImageCmForm({
+                                      name: (m.name as string) || '',
+                                      modelId: (m.modelId as string) || '',
+                                      baseURL: (m.baseURL as string) || '',
+                                      apiKeySource: ((m.apiKeySource as 'own' | 'provider') || 'provider'),
+                                      apiKey: '',
+                                      keyProvider: (m.keyProvider as string) || '',
+                                      supportsSize: m.supportsSize !== false,
+                                    })
+                                    setImageFormOpen(true)
+                                  }}
+                                  className="p-1.5 rounded-lg text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
+                                >
+                                  <Wrench className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteImageModel(m.id as string)}
+                                  disabled={imageCmDeleting === m.id}
+                                  className="p-1.5 rounded-lg text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                                >
+                                  {imageCmDeleting === m.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-content-muted text-left py-1">
+                          暂无自定义模型。点击「添加」配置 OpenAI 兼容的生图端点。
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 添加 / 编辑 自定义模型表单（折叠面板） */}
+                    <details
+                      open={imageFormOpen}
+                      onToggle={(e) => setImageFormOpen(e.currentTarget.open)}
+                      className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 group"
+                    >
+                      <summary className="flex items-center justify-between cursor-pointer list-none">
+                        <p className="text-xs font-medium text-content-secondary text-left">
+                          {editingImageModelId ? '编辑自定义模型' : '添加自定义模型'}
+                        </p>
+                        <ChevronDown className="w-3.5 h-3.5 text-content-muted transition-transform group-open:rotate-180" />
+                      </summary>
+
+                      <div className="space-y-2.5 mt-2.5">
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={imageCmForm.name}
+                            onChange={(e) => setImageCmForm((f) => ({ ...f, name: e.target.value }))}
+                            placeholder="显示名称 (如: 我的 SDXL)"
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          />
+                          <input
+                            type="text"
+                            value={imageCmForm.modelId}
+                            onChange={(e) => setImageCmForm((f) => ({ ...f, modelId: e.target.value }))}
+                            placeholder="模型 ID (如: stable-diffusion-xl)"
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={imageCmForm.baseURL}
+                          onChange={(e) => setImageCmForm((f) => ({ ...f, baseURL: e.target.value }))}
+                          placeholder="Base URL (OpenAI 兼容端点，如: https://api.example.com/v1)"
+                          className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                        />
+                        <select
+                          value={imageCmForm.apiKeySource}
+                          onChange={(e) => setImageCmForm((f) => ({ ...f, apiKeySource: e.target.value as 'own' | 'provider' }))}
+                          className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                        >
+                          <option value="provider">复用已有服务商 Key</option>
+                          <option value="own">使用独立 API Key</option>
+                        </select>
+                        {imageCmForm.apiKeySource === 'provider' && (
+                          <select
+                            value={imageCmForm.keyProvider}
+                            onChange={(e) => setImageCmForm((f) => ({ ...f, keyProvider: e.target.value }))}
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          >
+                            <option value="">选择服务商...</option>
+                            {keys.map((k) => (
+                              <option key={k.provider} value={k.provider}>{k.provider}</option>
+                            ))}
+                          </select>
+                        )}
+                        {imageCmForm.apiKeySource === 'own' && (
+                          <input
+                            type="password"
+                            value={imageCmForm.apiKey}
+                            onChange={(e) => setImageCmForm((f) => ({ ...f, apiKey: e.target.value }))}
+                            placeholder={editingImageModelId ? 'API Key (留空保持原 Key)' : 'API Key'}
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          />
+                        )}
+                        <label className="flex items-center gap-1.5 text-xs text-content-secondary cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={imageCmForm.supportsSize}
+                            onChange={(e) => setImageCmForm((f) => ({ ...f, supportsSize: e.target.checked }))}
+                            className="accent-accent"
+                          />
+                          支持自定义尺寸
+                        </label>
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            onClick={handleSaveImageModel}
+                            disabled={imageCmSaving}
+                            className={cn(
+                              'flex-1 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5',
+                              !imageCmSaving && imageCmForm.name.trim() && imageCmForm.modelId.trim() && imageCmForm.baseURL.trim()
+                                ? 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                                : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                            )}
+                          >
+                            {imageCmSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            {editingImageModelId ? '保存修改' : '添加'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setImageFormOpen(false)
+                              setEditingImageModelId(null)
+                              setImageCmForm({ name: '', modelId: '', baseURL: '', apiKeySource: 'provider', apiKey: '', keyProvider: '', supportsSize: true })
+                            }}
+                            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    </details>
+
+                    {/* 尺寸设置 */}
+                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium text-content-secondary text-left">图片尺寸</p>
+                        {imageSizeSaving && <Loader2 className="w-3 h-3 text-content-muted animate-spin" />}
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { value: '1024*1024', label: '1:1', desc: '1024×1024' },
+                          { value: '720*1280', label: '9:16', desc: '720×1280 (竖)' },
+                          { value: '1280*720', label: '16:9', desc: '1280×720 (横)' },
+                        ].map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => setImageSize(opt.value)}
+                            className={cn(
+                              'relative px-3 py-2.5 rounded-xl border text-left transition-all',
+                              imageSize === opt.value
+                                ? 'border-accent bg-accent/10 ring-2 ring-accent/20'
+                                : 'border-line/60 bg-surface-muted/60 hover:border-line-strong'
+                            )}
+                          >
+                            {imageSize === opt.value && (
+                              <Check className="absolute top-1.5 right-1.5 w-3 h-3 text-accent" />
+                            )}
+                            <p className="text-xs font-medium text-content-primary">{opt.label}</p>
+                            <p className="text-[11px] text-content-muted mt-0.5">{opt.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-content-muted text-left">选择即自动保存</p>
+                    </div>
                   </div>
                 )}
-
-                {/* Section title */}
-                <h3 className="text-sm font-semibold text-content-primary mb-2.5 text-left">
-                  {sectionTitle}
-                </h3>
 
                 {/* 服务商 */}
                 {activeSection === 'providers' && (
@@ -859,256 +1484,320 @@ export function SettingsModal() {
                         )}
                       </div>
                     )}
-                  </div>
-                )}
 
-                {/* 自定义模型 */}
-                {activeSection === 'customModels' && (
-                  <div className="space-y-3">
-                    {/* Form for add/edit */}
-                    <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
-                      <h4 className="text-sm font-semibold text-content-primary">{cmForm.id ? '编辑自定义模型' : '添加自定义模型'}</h4>
-                      
-                      {/* Presets */}
-                      <div className="flex flex-wrap gap-1.5">
-                        {CUSTOM_MODEL_PRESETS.map((preset) => (
-                          <button
-                            key={preset.name}
-                            onClick={() => applyPreset(preset)}
-                            className="px-2.5 py-1 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors"
-                          >
-                            {preset.name}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Name & model id */}
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={cmForm.name}
-                          onChange={(e) => setCmForm({ ...cmForm, name: e.target.value })}
-                          placeholder="显示名称 (如：我的 DeepSeek)"
-                          className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                        />
-                        <input
-                          type="text"
-                          value={cmForm.modelId}
-                          onChange={(e) => setCmForm({ ...cmForm, modelId: e.target.value })}
-                          placeholder="模型 ID (如：deepseek-chat)"
-                          className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                        />
-                      </div>
-
-                      {/* 重复模型提示 */}
-                      {(() => {
-                        const mid = cmForm.modelId.trim()
-                        const pid = cmForm.keySource === 'provider' ? cmForm.provider : ''
-                        const builtinHit = !!(pid && mid && providers.find(p => p.id === pid)?.models.includes(mid))
-                        const ownHit = !!(mid && customModels.some(m => m.modelId === mid && (!cmForm.id || m.dbId !== cmForm.id)))
-                        if (builtinHit) return (
-                          <p className="text-[10px] text-amber-600 dark:text-amber-400 text-left flex items-center gap-1">
-                            <AlertCircle className="w-3 h-3 shrink-0" /> 该模型 ID 已在内置列表中，通常无需重复添加
-                          </p>
-                        )
-                        if (ownHit) return (
-                          <p className="text-[10px] text-amber-600 dark:text-amber-400 text-left flex items-center gap-1">
-                            <AlertCircle className="w-3 h-3 shrink-0" /> 已存在相同模型 ID 的自定义模型，保存会失败
-                          </p>
-                        )
-                        return null
-                      })()}
-
-                      {/* Base URL */}
-                      <div className="space-y-1">
-                        <input
-                          type="text"
-                          value={cmForm.baseURL}
-                          onChange={(e) => setCmForm({ ...cmForm, baseURL: e.target.value })}
-                          placeholder={cmForm.keySource === 'provider'
-                            ? 'Base URL (可选：留空使用服务商官方接口)'
-                            : 'Base URL (OpenAI 兼容，如：https://api.siliconflow.cn/v1)'}
-                          className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                        />
-                        {cmForm.keySource === 'provider' && (
-                          <p className="text-[10px] text-content-muted text-left">
-                            留空将直接调用所选服务商官方接口（适合添加该服务商未内置的新模型）；也可填写代理或网关地址覆盖。
-                          </p>
-                        )}
-                      </div>
-
-                      {/* API protocol selector */}
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={cmForm.protocol}
-                          onChange={(e) => setCmForm({ ...cmForm, protocol: e.target.value as CustomModelForm['protocol'] })}
-                          className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                        >
-                          <option value="auto">自动识别接口协议</option>
-                          <option value="chat">Chat Completions (/chat/completions)</option>
-                          <option value="responses">OpenAI Responses (/responses)</option>
-                          <option value="anthropic">Anthropic (/messages)</option>
-                        </select>
-                      </div>
-
-                      {/* Key source selector */}
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={cmForm.keySource}
-                          onChange={(e) => {
-                            const v = e.target.value as 'own' | 'provider' | 'none'
-                            setCmForm({
-                              ...cmForm,
-                              keySource: v,
-                              // 复用服务商时清空 Base URL（留空走服务商原生接口）
-                              baseURL: v === 'provider' ? '' : (cmForm.baseURL || 'https://'),
-                            })
-                          }}
-                          className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                        >
-                          <option value="own">使用独立 API Key</option>
-                          <option value="provider">复用已有服务商 Key</option>
-                          <option value="none">无需鉴权 (本地)</option>
-                        </select>
-                      </div>
-
-                      {/* Conditional key fields */}
-                      {(cmForm.keySource === 'own' || cmForm.keySource === 'provider') && (
-                        <div className="space-y-1.5">
-                          {cmForm.keySource === 'own' && (
-                            <input
-                              type="password"
-                              value={cmForm.apiKey}
-                              onChange={(e) => setCmForm({ ...cmForm, apiKey: e.target.value })}
-                              placeholder="API Key"
-                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                            />
-                          )}
-                          {cmForm.keySource === 'provider' && (
-                            <select
-                              value={cmForm.provider || ''}
-                              onChange={(e) => setCmForm({ ...cmForm, provider: e.target.value })}
-                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                            >
-                              <option value="">选择服务商...</option>
-                              {keys.map((k) => (
-                                <option key={k.provider} value={k.provider}>{k.provider}</option>
-                              ))}
-                            </select>
-                          )}
+                    {/* 自定义模型区块 */}
+                    <div className="pt-3 border-t border-line/40 space-y-3">
+                      <div className="flex items-center justify-between px-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <Cpu className="w-3.5 h-3.5 text-content-secondary" />
+                          <p className="text-xs font-medium text-content-secondary">自定义模型</p>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-subtle/80 text-content-muted font-mono">
+                            {customModels.length}
+                          </span>
                         </div>
+                        <button
+                          onClick={() => {
+                            setCmForm({
+                              id: '',
+                              name: '',
+                              modelId: '',
+                              baseURL: 'https://',
+                              protocol: 'auto',
+                              keySource: 'own',
+                              apiKey: '',
+                              provider: '',
+                              contextWindow: 8192,
+                              supportsVision: false,
+                              supportsFiles: false,
+                              supportsReasoning: false,
+                            })
+                            setCmFormOpen(true)
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
+                        >
+                          <Plus className="w-3 h-3" />
+                          添加
+                        </button>
+                      </div>
+
+                      {customModels.length > 0 ? (
+                        <ul className="space-y-1.5">
+                          {customModels.map((model) => (
+                            <li
+                              key={model.id}
+                              className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-surface/60 border border-line/60"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', CUSTOM_MODEL_DOT)} />
+                                <div className="min-w-0">
+                                  <p className="text-xs font-medium text-content-primary truncate">{model.name}</p>
+                                  <p className="text-[11px] text-content-muted truncate">
+                                    {model.modelId}
+                                    {' · '}
+                                    {model.providerKey ? `复用 ${model.providerKey}` : '独立 Key'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {cmTestResult[model.dbId] === 'success' && <CheckCircle className="w-4 h-4 text-green-500" />}
+                                {cmTestResult[model.dbId] === 'error' && <AlertCircle className="w-4 h-4 text-red-500" />}
+                                <button
+                                  onClick={() => startEdit(model)}
+                                  className="p-1.5 rounded-lg text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
+                                >
+                                  <Wrench className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleCmDelete(model.dbId)}
+                                  disabled={cmDeleting === model.dbId}
+                                  className="p-1.5 rounded-lg text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                                >
+                                  {cmDeleting === model.dbId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-[11px] text-content-muted text-left py-1 px-0.5">
+                          暂无自定义模型。您可以添加 OpenAI 兼容端点（如 OpenRouter、SiliconFlow、Ollama 等）。
+                        </p>
                       )}
 
-                      {/* Context window */}
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-content-secondary shrink-0">上下文窗口</span>
-                        <input
-                          type="number"
-                          value={cmForm.contextWindow}
-                          onChange={(e) => setCmForm({ ...cmForm, contextWindow: Number(e.target.value) })}
-                          className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                        />
-                      </div>
+                      {/* 自定义模型表单（折叠面板） */}
+                      <details
+                        open={cmFormOpen}
+                        onToggle={(e) => setCmFormOpen(e.currentTarget.open)}
+                        className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 group"
+                      >
+                        <summary className="flex items-center justify-between cursor-pointer list-none">
+                          <p className="text-xs font-medium text-content-secondary text-left">
+                            {cmForm.id ? '编辑自定义模型' : '添加自定义模型'}
+                          </p>
+                          <ChevronDown className="w-3.5 h-3.5 text-content-muted transition-transform group-open:rotate-180" />
+                        </summary>
 
-                      {/* Toggles */}
-                      <div className="grid grid-cols-3 gap-1.5 pt-1">
-                        <label className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={cmForm.supportsVision}
-                            onChange={(e) => setCmForm({ ...cmForm, supportsVision: e.target.checked })}
-                            className="accent-accent"
-                          />
-                          <span>支持视觉</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={cmForm.supportsFiles}
-                            onChange={(e) => setCmForm({ ...cmForm, supportsFiles: e.target.checked })}
-                            className="accent-accent"
-                          />
-                          <span>支持文件</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={cmForm.supportsReasoning}
-                            onChange={(e) => setCmForm({ ...cmForm, supportsReasoning: e.target.checked })}
-                            className="accent-accent"
-                          />
-                          <span>支持推理</span>
-                        </label>
-                      </div>
+                        <div className="space-y-2.5 mt-2.5">
+                          {/* Presets */}
+                          <div className="flex flex-wrap gap-1.5">
+                            {CUSTOM_MODEL_PRESETS.map((preset) => (
+                              <button
+                                key={preset.name}
+                                onClick={() => applyPreset(preset)}
+                                className="px-2.5 py-1 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors"
+                              >
+                                {preset.name}
+                              </button>
+                            ))}
+                          </div>
 
-                      {/* Actions */}
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleCmTest(cmForm.id || undefined)}
-                          disabled={cmTesting !== null}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors shrink-0"
-                        >
-                          {cmTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                          {cmForm.id ? '测试连接' : '保存前测试'}
-                        </button>
-                        {cmFormResult === 'success' && <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />}
-                        {cmFormResult === 'error' && <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />}
-                        <button
-                          onClick={handleCmSave}
-                          disabled={cmSaving || cmForm.keySource === 'own' && !cmForm.apiKey}
-                          className={cn(
-                            'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
-                            !(cmSaving || (cmForm.keySource === 'own' && !cmForm.apiKey))
-                              ? 'bg-accent text-accent-foreground hover:bg-accent-hover'
-                              : 'bg-surface-muted text-content-muted cursor-not-allowed'
-                          )}
-                        >
-                          {cmSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                          保存
-                        </button>
-                      </div>
-                    </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              value={cmForm.name}
+                              onChange={(e) => setCmForm({ ...cmForm, name: e.target.value })}
+                              placeholder="显示名称 (如：我的 DeepSeek)"
+                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                            />
+                            <input
+                              type="text"
+                              value={cmForm.modelId}
+                              onChange={(e) => setCmForm({ ...cmForm, modelId: e.target.value })}
+                              placeholder="模型 ID (如：deepseek-chat)"
+                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                            />
+                          </div>
 
-                    {/* List of existing models */}
-                    {customModels.length > 0 ? (
-                      <ul className="space-y-1.5">
-                        {customModels.map((model) => (
-                          <li
-                            key={model.id}
-                            className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-surface/60 border border-line/60"
+                          {(() => {
+                            const mid = cmForm.modelId.trim()
+                            const pid = cmForm.keySource === 'provider' ? cmForm.provider : ''
+                            const builtinHit = !!(pid && mid && providers.find(p => p.id === pid)?.models.includes(mid))
+                            const ownHit = !!(mid && customModels.some(m => m.modelId === mid && (!cmForm.id || m.dbId !== cmForm.id)))
+                            if (builtinHit) return (
+                              <p className="text-[10px] text-amber-600 dark:text-amber-400 text-left flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3 shrink-0" /> 该模型 ID 已在内置列表中，通常无需重复添加
+                              </p>
+                            )
+                            if (ownHit) return (
+                              <p className="text-[10px] text-amber-600 dark:text-amber-400 text-left flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3 shrink-0" /> 已存在相同模型 ID 的自定义模型，保存会失败
+                              </p>
+                            )
+                            return null
+                          })()}
+
+                          <div className="space-y-1">
+                            <input
+                              type="text"
+                              value={cmForm.baseURL}
+                              onChange={(e) => setCmForm({ ...cmForm, baseURL: e.target.value })}
+                              placeholder={cmForm.keySource === 'provider'
+                                ? 'Base URL (可选：留空使用服务商官方接口)'
+                                : 'Base URL (OpenAI 兼容，如：https://api.siliconflow.cn/v1)'}
+                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                            />
+                            {cmForm.keySource === 'provider' && (
+                              <p className="text-[10px] text-content-muted text-left">
+                                留空将直接调用所选服务商官方接口；也可填写代理或网关地址覆盖。
+                              </p>
+                            )}
+                          </div>
+
+                          <select
+                            value={cmForm.protocol}
+                            onChange={(e) => setCmForm({ ...cmForm, protocol: e.target.value as CustomModelForm['protocol'] })}
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
                           >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className={cn('w-1.5 h-1.5 rounded-full', CUSTOM_MODEL_DOT)} />
-                              <div className="min-w-0">
-                                <p className="text-xs font-medium text-content-primary truncate">{model.name}</p>
-                                <p className="text-[11px] text-content-muted truncate">{model.modelId} @ {model.baseURL ? model.baseURL.replace(/^https?:\/\//, '') : (model.providerKey || '服务商官方接口')}</p>
-                              </div>
+                            <option value="auto">自动识别接口协议</option>
+                            <option value="chat">Chat Completions (/chat/completions)</option>
+                            <option value="responses">OpenAI Responses (/responses)</option>
+                            <option value="anthropic">Anthropic (/messages)</option>
+                          </select>
+
+                          <select
+                            value={cmForm.keySource}
+                            onChange={(e) => {
+                              const v = e.target.value as 'own' | 'provider' | 'none'
+                              setCmForm({
+                                ...cmForm,
+                                keySource: v,
+                                baseURL: v === 'provider' ? '' : (cmForm.baseURL || 'https://'),
+                              })
+                            }}
+                            className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                          >
+                            <option value="own">使用独立 API Key</option>
+                            <option value="provider">复用已有服务商 Key</option>
+                            <option value="none">无需鉴权 (本地)</option>
+                          </select>
+
+                          {(cmForm.keySource === 'own' || cmForm.keySource === 'provider') && (
+                            <div className="space-y-1.5">
+                              {cmForm.keySource === 'own' && (
+                                <input
+                                  type="password"
+                                  value={cmForm.apiKey}
+                                  onChange={(e) => setCmForm({ ...cmForm, apiKey: e.target.value })}
+                                  placeholder={cmForm.id ? 'API Key (留空保持原 Key)' : 'API Key'}
+                                  className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                                />
+                              )}
+                              {cmForm.keySource === 'provider' && (
+                                <select
+                                  value={cmForm.provider || ''}
+                                  onChange={(e) => setCmForm({ ...cmForm, provider: e.target.value })}
+                                  className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                                >
+                                  <option value="">选择服务商...</option>
+                                  {keys.map((k) => (
+                                    <option key={k.provider} value={k.provider}>{k.provider}</option>
+                                  ))}
+                                </select>
+                              )}
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              {cmTestResult[model.dbId] === 'success' && <CheckCircle className="w-4 h-4 text-green-500" />}
-                              {cmTestResult[model.dbId] === 'error' && <AlertCircle className="w-4 h-4 text-red-500" />}
+                          )}
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-content-secondary shrink-0">上下文窗口</span>
+                            <input
+                              type="number"
+                              value={cmForm.contextWindow}
+                              onChange={(e) => setCmForm({ ...cmForm, contextWindow: Number(e.target.value) })}
+                              className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                            />
+                          </div>
+
+                          <div className="pt-1">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <p className="text-[11px] text-content-muted">模型能力（不确定就点自动检测）</p>
                               <button
-                                onClick={() => startEdit(model)}
-                                className="p-1.5 rounded-lg text-content-muted hover:text-content-primary hover:bg-surface-subtle transition-colors"
+                                type="button"
+                                onClick={() => handleCmTest(cmForm.id || undefined, true)}
+                                disabled={cmTesting !== null}
+                                className="px-2 py-1 rounded-md text-[10px] font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors flex items-center gap-1"
+                                title="自动检测视觉和推理能力"
                               >
-                                <Wrench className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleCmDelete(model.dbId)}
-                                disabled={cmDeleting === model.dbId}
-                                className="p-1.5 rounded-lg text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-                              >
-                                {cmDeleting === model.dbId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                {cmTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                                自动检测
                               </button>
                             </div>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-[11px] text-content-muted text-left py-1">
-                        暂无自定义模型。您可以添加 OpenAI 兼容端点（如 OpenRouter、SiliconFlow、Ollama 等）。
-                      </p>
-                    )}
+                            <div className="grid grid-cols-3 gap-1.5">
+                              <label
+                                className="group relative flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer"
+                                title="开启后才能在聊天中发送图片给此模型"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={cmForm.supportsVision}
+                                  onChange={(e) => setCmForm({ ...cmForm, supportsVision: e.target.checked })}
+                                  className="accent-accent"
+                                />
+                                <span>视觉</span>
+                                <Info className="w-3 h-3 text-content-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </label>
+                              <label
+                                className="group relative flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer"
+                                title="开启后才能发送 PDF / txt 等附件"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={cmForm.supportsFiles}
+                                  onChange={(e) => setCmForm({ ...cmForm, supportsFiles: e.target.checked })}
+                                  className="accent-accent"
+                                />
+                                <span>文件</span>
+                                <Info className="w-3 h-3 text-content-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </label>
+                              <label
+                                className="group relative flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-muted text-xs cursor-pointer"
+                                title="开启后才能显示思考过程（如 DeepSeek-R1）"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={cmForm.supportsReasoning}
+                                  onChange={(e) => setCmForm({ ...cmForm, supportsReasoning: e.target.checked })}
+                                  className="accent-accent"
+                                />
+                                <span>推理</span>
+                                <Info className="w-3 h-3 text-content-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </label>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              onClick={() => handleCmTest(cmForm.id || undefined)}
+                              disabled={cmTesting !== null}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors shrink-0"
+                            >
+                              {cmTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                              {cmForm.id ? '测试连接' : '保存前测试'}
+                            </button>
+                            {cmFormResult === 'success' && <CheckCircle className="w-4 h-4 text-green-500 shrink-0" />}
+                            {cmFormResult === 'error' && <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />}
+                            <button
+                              onClick={handleCmSave}
+                              disabled={cmSaving || (cmForm.keySource === 'own' && !cmForm.apiKey && !cmForm.id)}
+                              className={cn(
+                                'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                                !(cmSaving || (cmForm.keySource === 'own' && !cmForm.apiKey && !cmForm.id))
+                                  ? 'bg-accent text-accent-foreground hover:bg-accent-hover'
+                                  : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                              )}
+                            >
+                              {cmSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                              保存
+                            </button>
+                            <button
+                              onClick={() => setCmFormOpen(false)}
+                              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors shrink-0"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      </details>
+                    </div>
                   </div>
                 )}
 
@@ -1121,144 +1810,346 @@ export function SettingsModal() {
                       </p>
                     ) : (
                       <>
-                        {/* 总览卡片 */}
-                        <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
-                          <div className="flex items-end justify-between gap-3">
-                            <div className="text-left">
-                              <p className="text-[11px] text-content-muted">累计消耗 Token</p>
-                              <p className="text-xl font-semibold text-content-primary font-mono leading-tight">
-                                {usageStats.totals.totalTokens.toLocaleString()}
-                              </p>
-                            </div>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-muted text-content-muted font-mono shrink-0 mb-0.5">
-                              {usageStats.totals.messages.toLocaleString()} 条回复
-                            </span>
+                        {/* Tab 切换 + 刷新 */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="inline-flex p-0.5 rounded-lg bg-surface-muted/60 border border-line/60">
+                            {([
+                              { id: 'chat' as const, label: '聊天' },
+                              { id: 'image' as const, label: '生图' },
+                            ]).map((tab) => (
+                              <button
+                                key={tab.id}
+                                onClick={() => setUsageTab(tab.id)}
+                                className={cn(
+                                  'px-3 py-1 rounded-md text-[11px] font-medium transition-all',
+                                  usageTab === tab.id
+                                    ? 'bg-surface text-content-primary shadow-sm'
+                                    : 'text-content-muted hover:text-content-secondary'
+                                )}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
                           </div>
-                          {/* 输入/输出拆分条 */}
-                          <div className="space-y-1.5">
-                            {(() => {
-                              const t = usageStats.totals
-                              const pct = t.totalTokens > 0
-                                ? Math.round((t.promptTokens / t.totalTokens) * 100)
-                                : 0
-                              return (
-                                <>
-                                  <div className="h-1.5 rounded-full bg-surface-muted overflow-hidden flex">
-                                    <div
-                                      className="h-full bg-accent/70"
-                                      style={{ width: `${pct}%` }}
-                                      title={`输入 ${t.promptTokens.toLocaleString()}`}
-                                    />
-                                    <div
-                                      className="h-full bg-content-muted/40 flex-1"
-                                      title={`输出 ${t.completionTokens.toLocaleString()}`}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between text-[11px]">
-                                    <span className="text-content-secondary flex items-center gap-1.5">
-                                      <span className="w-2 h-2 rounded-full bg-accent/70 inline-block" />
-                                      输入 {t.promptTokens.toLocaleString()}
-                                    </span>
-                                    <span className="text-content-muted flex items-center gap-1.5">
-                                      <span className="w-2 h-2 rounded-full bg-content-muted/40 inline-block" />
-                                      输出 {t.completionTokens.toLocaleString()}
-                                    </span>
-                                  </div>
-                                </>
-                              )
-                            })()}
-                          </div>
+                          <button
+                            onClick={loadUsageStats}
+                            disabled={usageRefreshing}
+                            className={cn(
+                              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
+                              usageRefreshing
+                                ? 'bg-surface-muted text-content-muted cursor-not-allowed'
+                                : 'bg-surface-muted text-content-secondary hover:bg-surface-subtle'
+                            )}
+                            title="刷新用量统计"
+                          >
+                            <RefreshCw className={cn('w-3 h-3', usageRefreshing && 'animate-spin')} />
+                            刷新
+                          </button>
                         </div>
 
-                        {/* 最近 30 天柱状图 */}
-                        {usageStats.byDay.length > 0 && (
-                          <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
-                            <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">
-                              最近 30 天
-                            </p>
-                            {(() => {
-                              const max = Math.max(...usageStats.byDay.map((d) => d.totalTokens), 1)
-                              const sum30 = usageStats.byDay.reduce((s, d) => s + d.totalTokens, 0)
-                              return (
-                                <>
-                                  <div className="flex items-end gap-[3px] h-20">
-                                    {usageStats.byDay.map((d) => (
-                                      <div
-                                        key={d.date}
-                                        className="flex-1 flex items-end h-full group"
-                                        title={`${d.date.slice(5)} · ${d.totalTokens.toLocaleString()} tokens`}
-                                      >
+                        {usageTab === 'chat' ? (
+                          <>
+                            {/* 总览卡片 */}
+                            <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                              <div className="flex items-end justify-between gap-3">
+                                <div className="text-left">
+                                  <p className="text-[11px] text-content-muted">累计消耗 Token</p>
+                                  <p className="text-xl font-semibold text-content-primary font-mono leading-tight">
+                                    {usageStats.chat.totals.totalTokens.toLocaleString()}
+                                  </p>
+                                </div>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-muted text-content-muted font-mono shrink-0 mb-0.5">
+                                  {usageStats.chat.totals.messages.toLocaleString()} 条回复
+                                </span>
+                              </div>
+                              <div className="space-y-1.5">
+                                {(() => {
+                                  const t = usageStats.chat.totals
+                                  const pct = t.totalTokens > 0
+                                    ? Math.round((t.promptTokens / t.totalTokens) * 100)
+                                    : 0
+                                  return (
+                                    <>
+                                      <div className="h-1.5 rounded-full bg-surface-muted overflow-hidden flex">
                                         <div
-                                          className={cn(
-                                            'w-full rounded-t-[3px] transition-colors',
-                                            d.totalTokens > 0
-                                              ? 'bg-accent/70 group-hover:bg-accent'
-                                              : 'bg-surface-subtle/60'
-                                          )}
-                                          style={{
-                                            height: d.totalTokens > 0
-                                              ? `${Math.max((d.totalTokens / max) * 100, 4)}%`
-                                              : '4px',
-                                          }}
-                                        />
-                                      </div>
-                                    ))}
-                                  </div>
-                                  <div className="flex items-center justify-between mt-1.5 text-[10px] text-content-muted font-mono">
-                                    <span>{usageStats.byDay[0].date.slice(5)}</span>
-                                    <span>{sum30.toLocaleString()} tokens</span>
-                                    <span>{usageStats.byDay[usageStats.byDay.length - 1].date.slice(5)}</span>
-                                  </div>
-                                </>
-                              )
-                            })()}
-                          </div>
-                        )}
-
-                        {/* 按模型统计 */}
-                        {usageStats.byModel.length > 0 && (
-                          <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
-                            <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">
-                              按模型
-                            </p>
-                            <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
-                              {usageStats.byModel.map((m) => {
-                                const pct = usageStats.totals.totalTokens > 0
-                                  ? Math.round((m.totalTokens / usageStats.totals.totalTokens) * 100)
-                                  : 0
-                                return (
-                                  <li
-                                    key={m.model}
-                                    className="rounded-lg bg-surface-muted/60 border border-line/40 px-2.5 py-2"
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-xs text-content-primary truncate">
-                                        {m.model}
-                                      </span>
-                                      <span className="text-xs font-mono text-content-secondary shrink-0">
-                                        {m.totalTokens.toLocaleString()}
-                                      </span>
-                                    </div>
-                                    <div className="mt-1.5 flex items-center gap-2">
-                                      <div className="flex-1 h-1 rounded-full bg-surface-subtle overflow-hidden">
-                                        <div
-                                          className="h-full rounded-full bg-accent/70"
+                                          className="h-full bg-accent/70"
                                           style={{ width: `${pct}%` }}
+                                          title={`输入 ${t.promptTokens.toLocaleString()}`}
+                                        />
+                                        <div
+                                          className="h-full bg-content-muted/40 flex-1"
+                                          title={`输出 ${t.completionTokens.toLocaleString()}`}
                                         />
                                       </div>
-                                      <span className="text-[10px] text-content-muted font-mono shrink-0 w-9 text-right">
-                                        {pct}%
-                                      </span>
-                                    </div>
-                                    <div className="mt-1 flex items-center justify-between text-[10px] text-content-muted">
-                                      <span>输入 {m.promptTokens.toLocaleString()} · 输出 {m.completionTokens.toLocaleString()}</span>
-                                      <span>{m.messages} 条</span>
-                                    </div>
-                                  </li>
-                                )
-                              })}
-                            </ul>
-                          </div>
+                                      <div className="flex items-center justify-between text-[11px]">
+                                        <span className="text-content-secondary flex items-center gap-1.5">
+                                          <span className="w-2 h-2 rounded-full bg-accent/70 inline-block" />
+                                          输入 {t.promptTokens.toLocaleString()}
+                                        </span>
+                                        <span className="text-content-muted flex items-center gap-1.5">
+                                          <span className="w-2 h-2 rounded-full bg-content-muted/40 inline-block" />
+                                          输出 {t.completionTokens.toLocaleString()}
+                                        </span>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                            </div>
+
+                            {/* 最近 30 天柱状图 */}
+                            {usageStats.chat.byDay.length > 0 && (
+                              <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                                <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">
+                                  最近 30 天 Token 消耗
+                                </p>
+                                {(() => {
+                                  const days = usageStats.chat.byDay
+                                  const max = Math.max(...days.map((d) => d.totalTokens), 1)
+                                  const sum30 = days.reduce((s, d) => s + d.totalTokens, 0)
+                                  return (
+                                    <>
+                                      <div className="flex items-end gap-[3px] h-20">
+                                        {days.map((d) => (
+                                          <div
+                                            key={d.date}
+                                            className="flex-1 flex items-end h-full group"
+                                            title={`${d.date.slice(5)} · ${d.totalTokens.toLocaleString()} tokens`}
+                                          >
+                                            <div
+                                              className={cn(
+                                                'w-full rounded-t-[3px] transition-colors',
+                                                d.totalTokens > 0
+                                                  ? 'bg-accent/70 group-hover:bg-accent'
+                                                  : 'bg-surface-subtle/60'
+                                              )}
+                                              style={{
+                                                height: d.totalTokens > 0
+                                                  ? `${Math.max((d.totalTokens / max) * 100, 4)}%`
+                                                  : '4px',
+                                              }}
+                                            />
+                                          </div>
+                                        ))}
+                                      </div>
+                                      <div className="flex items-center justify-between mt-1.5 text-[10px] text-content-muted font-mono">
+                                        <span>{days[0].date.slice(5)}</span>
+                                        <span>{sum30.toLocaleString()} tokens</span>
+                                        <span>{days[days.length - 1].date.slice(5)}</span>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                            )}
+
+                            {/* 按模型统计 */}
+                            {usageStats.chat.byModel.length > 0 && (
+                              <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                                <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">
+                                  按模型
+                                </p>
+                                <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
+                                  {usageStats.chat.byModel.map((m) => {
+                                    const pct = usageStats.chat.totals.totalTokens > 0
+                                      ? Math.round((m.totalTokens / usageStats.chat.totals.totalTokens) * 100)
+                                      : 0
+                                    return (
+                                      <li
+                                        key={m.model}
+                                        className="rounded-lg bg-surface-muted/60 border border-line/40 px-2.5 py-2"
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs text-content-primary truncate">
+                                            {m.model}
+                                          </span>
+                                          <span className="text-xs font-mono text-content-secondary shrink-0">
+                                            {m.totalTokens.toLocaleString()}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1.5 flex items-center gap-2">
+                                          <div className="flex-1 h-1 rounded-full bg-surface-subtle overflow-hidden">
+                                            <div
+                                              className="h-full rounded-full bg-accent/70"
+                                              style={{ width: `${pct}%` }}
+                                            />
+                                          </div>
+                                          <span className="text-[10px] text-content-muted font-mono shrink-0 w-9 text-right">
+                                            {pct}%
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 flex items-center justify-between text-[10px] text-content-muted">
+                                          <span>输入 {m.promptTokens.toLocaleString()} · 输出 {m.completionTokens.toLocaleString()}</span>
+                                          <span>{m.messages} 条</span>
+                                        </div>
+                                      </li>
+                                    )
+                                  })}
+                                </ul>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {/* 生图总览卡片 */}
+                            <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                              <div className="flex items-end justify-between gap-3">
+                                <div className="text-left">
+                                  <p className="text-[11px] text-content-muted">累计生图</p>
+                                  <p className="text-xl font-semibold text-content-primary font-mono leading-tight">
+                                    {usageStats.image.totals.count.toLocaleString()}
+                                    <span className="text-xs font-normal text-content-muted ml-1">张</span>
+                                  </p>
+                                </div>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-muted text-content-muted font-mono shrink-0 mb-0.5">
+                                  {usageStats.image.byModel.length} 个模型
+                                </span>
+                              </div>
+
+                              {/* 尺寸分布 */}
+                              {usageStats.image.bySize.length > 0 && (
+                                <div className="space-y-1.5">
+                                  {(() => {
+                                    const total = usageStats.image.totals.count
+                                    const SIZE_LABELS: Record<string, string> = {
+                                      '1024*1024': '1:1 · 1024×1024',
+                                      '720*1280': '9:16 · 720×1280',
+                                      '1280*720': '16:9 · 1280×720',
+                                    }
+                                    return (
+                                      <>
+                                        <div className="h-1.5 rounded-full bg-surface-muted overflow-hidden flex">
+                                          {usageStats.image.bySize.map((s, i) => {
+                                            const pct = total > 0 ? (s.count / total) * 100 : 0
+                                            const colors = ['bg-accent/70', 'bg-emerald-500/70', 'bg-amber-500/70', 'bg-purple-500/70']
+                                            return (
+                                              <div
+                                                key={s.size}
+                                                className={cn('h-full', colors[i % colors.length])}
+                                                style={{ width: `${pct}%` }}
+                                                title={`${SIZE_LABELS[s.size] ?? s.size} · ${s.count} 张`}
+                                              />
+                                            )
+                                          })}
+                                        </div>
+                                        <ul className="space-y-1">
+                                          {usageStats.image.bySize.map((s, i) => {
+                                            const pct = total > 0 ? Math.round((s.count / total) * 100) : 0
+                                            const colors = ['bg-accent/70', 'bg-emerald-500/70', 'bg-amber-500/70', 'bg-purple-500/70']
+                                            return (
+                                              <li key={s.size} className="flex items-center justify-between text-[11px]">
+                                                <span className="text-content-secondary flex items-center gap-1.5">
+                                                  <span className={cn('w-2 h-2 rounded-full inline-block', colors[i % colors.length])} />
+                                                  {SIZE_LABELS[s.size] ?? s.size}
+                                                </span>
+                                                <span className="text-content-muted font-mono">
+                                                  {s.count.toLocaleString()} 张 · {pct}%
+                                                </span>
+                                              </li>
+                                            )
+                                          })}
+                                        </ul>
+                                      </>
+                                    )
+                                  })()}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* 最近 30 天柱状图 */}
+                            {usageStats.image.byDay.length > 0 && (
+                              <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                                <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">
+                                  最近 30 天生图张数
+                                </p>
+                                {(() => {
+                                  const days = usageStats.image.byDay
+                                  const max = Math.max(...days.map((d) => d.count), 1)
+                                  const sum30 = days.reduce((s, d) => s + d.count, 0)
+                                  return (
+                                    <>
+                                      <div className="flex items-end gap-[3px] h-20">
+                                        {days.map((d) => (
+                                          <div
+                                            key={d.date}
+                                            className="flex-1 flex items-end h-full group"
+                                            title={`${d.date.slice(5)} · ${d.count} 张`}
+                                          >
+                                            <div
+                                              className={cn(
+                                                'w-full rounded-t-[3px] transition-colors',
+                                                d.count > 0
+                                                  ? 'bg-emerald-500/70 group-hover:bg-emerald-500'
+                                                  : 'bg-surface-subtle/60'
+                                              )}
+                                              style={{
+                                                height: d.count > 0
+                                                  ? `${Math.max((d.count / max) * 100, 4)}%`
+                                                  : '4px',
+                                              }}
+                                            />
+                                          </div>
+                                        ))}
+                                      </div>
+                                      <div className="flex items-center justify-between mt-1.5 text-[10px] text-content-muted font-mono">
+                                        <span>{days[0].date.slice(5)}</span>
+                                        <span>{sum30.toLocaleString()} 张</span>
+                                        <span>{days[days.length - 1].date.slice(5)}</span>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                            )}
+
+                            {/* 按模型统计 */}
+                            {usageStats.image.byModel.length > 0 && (
+                              <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                                <p className="text-[11px] font-medium text-content-secondary mb-2 text-left">
+                                  按模型
+                                </p>
+                                <ul className="space-y-1.5">
+                                  {usageStats.image.byModel.map((m) => {
+                                    const pct = usageStats.image.totals.count > 0
+                                      ? Math.round((m.count / usageStats.image.totals.count) * 100)
+                                      : 0
+                                    return (
+                                      <li
+                                        key={m.model}
+                                        className="rounded-lg bg-surface-muted/60 border border-line/40 px-2.5 py-2"
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs text-content-primary truncate">
+                                            {m.model}
+                                          </span>
+                                          <span className="text-xs font-mono text-content-secondary shrink-0">
+                                            {m.count.toLocaleString()} 张
+                                          </span>
+                                        </div>
+                                        <div className="mt-1.5 flex items-center gap-2">
+                                          <div className="flex-1 h-1 rounded-full bg-surface-subtle overflow-hidden">
+                                            <div
+                                              className="h-full rounded-full bg-emerald-500/70"
+                                              style={{ width: `${pct}%` }}
+                                            />
+                                          </div>
+                                          <span className="text-[10px] text-content-muted font-mono shrink-0 w-9 text-right">
+                                            {pct}%
+                                          </span>
+                                        </div>
+                                      </li>
+                                    )
+                                  })}
+                                </ul>
+                              </div>
+                            )}
+
+                            {usageStats.image.totals.count === 0 && (
+                              <p className="text-[11px] text-content-muted text-left py-1">
+                                暂无生图记录。在生图工作台或聊天中生成图片后会在这里显示统计。
+                              </p>
+                            )}
+                          </>
                         )}
                       </>
                     )}

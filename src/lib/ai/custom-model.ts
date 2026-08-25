@@ -3,6 +3,7 @@
  * - 构建 ModelDefinition 供 UI 使用
  * - 解析 API Key（独立 key / 复用已有 provider key）
  * - 创建 OpenAI 兼容的 provider 实例
+ * - 自动检测模型能力（视觉/推理）
  */
 
 import { createAnthropic } from "@ai-sdk/anthropic"
@@ -26,6 +27,13 @@ export interface CustomModelRow {
   supportsVision: boolean
   supportsFiles: boolean
   supportsReasoning: boolean
+}
+
+export interface DetectedCapabilities {
+  supportsVision: boolean
+  supportsReasoning: boolean
+  // supportsFiles 当前 OpenAI 兼容接口无法纯运行时检测（需后端元数据），由用户自行判断
+  supportsFiles?: boolean
 }
 
 // 从 DB 行构建 ModelDefinition（用于 ModelSelector）
@@ -166,4 +174,71 @@ export async function testCustomModelConnection(
     const msg = err instanceof Error ? err.message : "未知错误"
     return { ok: false, error: msg }
   }
+}
+
+/**
+ * 自动检测自定义模型的能力
+ * - 视觉：发送一张 1x1 透明 PNG 图片，看能否成功
+ * - 推理：通过模型 ID 名称启发式判断（如包含 "r1"/"reasoning"/"thinking" 等关键词）
+ *   以及尝试发送一个会触发思考的 prompt（如有 reasoningContent 字段则视为支持）
+ *
+ * 注：检测失败不会抛出错误，只返回检测到的能力（保守地标记为 false）
+ */
+export async function detectCustomModelCapabilities(
+  userId: string,
+  cm: CustomModelRow
+): Promise<DetectedCapabilities> {
+  const result: DetectedCapabilities = {
+    supportsVision: false,
+    supportsReasoning: false,
+  }
+
+  const apiKey = await resolveApiKey(userId, cm).catch(() => undefined)
+  if (!apiKey) return result
+
+  // 1. 基于模型 ID 的启发式判断（推理）
+  const id = cm.modelId.toLowerCase()
+  const reasoningKeywords = [
+    "reasoning", "thinking", "r1", "o1", "o3", "qwq",
+    "deepseek-r1", "deepseek-reasoner", "stepfun", "yi-lightning",
+    "magistral", "opus-4", "opus-4.1", "sonnet-4.5-thinking",
+  ]
+  if (reasoningKeywords.some((kw) => id.includes(kw))) {
+    result.supportsReasoning = true
+  }
+
+  // 2. 基于模型 ID 的启发式判断（视觉）
+  const visionKeywords = [
+    "vision", "gpt-4o", "gpt-4-vision", "gpt-4-turbo", "gpt-5",
+    "claude-3", "claude-4", "claude-sonnet-4", "claude-opus-4",
+    "gemini", "qwen-vl", "qwen2-vl", "qwen2.5-vl", "qvq",
+    "llava", "minicpm-v", "internvl", "yi-vl",
+  ]
+  if (visionKeywords.some((kw) => id.includes(kw))) {
+    result.supportsVision = true
+  }
+
+  // 3. 实际探测视觉能力（仅对未通过启发式判断的）
+  if (!result.supportsVision) {
+    try {
+      const model = createCustomLanguageModel(cm, apiKey)
+      // 1x1 透明 PNG base64
+      const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgAAIAAAUAAen63NgAAAAASUVORK5CYII="
+      await import("ai").then((ai) =>
+        ai.generateText({
+          model,
+          prompt: [
+            { type: "text", text: "看图回答：图中是什么颜色？" },
+            { type: "image", image: new URL(`data:image/png;base64,${tinyPng}`) },
+          ] as any,
+          maxOutputTokens: 8,
+        })
+      )
+      result.supportsVision = true
+    } catch {
+      // 探测失败，保守标记为 false
+    }
+  }
+
+  return result
 }

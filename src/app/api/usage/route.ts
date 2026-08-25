@@ -3,9 +3,14 @@ import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 
 /**
- * Token 消耗统计接口
- * 返回: 总用量、按模型分组、按天分组(最近 30 天,北京时间)
- * 统计来源: 每条 assistant 消息保存的 promptTokens / completionTokens
+ * Token / 生图消耗统计接口
+ *
+ * 区分两路数据:
+ *  - chat: 按 token 计费(每条 assistant 消息的 promptTokens / completionTokens)
+ *  - image: 按张数计费(每条 generatedImage 记录一张)
+ *
+ * 返回结构:
+ *   { chat: { totals, byModel, byDay }, image: { totals, byModel, byDay } }
  */
 export async function GET() {
   const session = await auth()
@@ -14,7 +19,32 @@ export async function GET() {
   }
   const userId = session.user.id
 
-  // 取该用户所有带 token 记录的助手消息(仅取聚合所需字段)
+  // 最近 30 天日期序列(北京时间),保证无数据的天也出现在结果中
+  const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000
+  const dayKeyOf = (d: Date) =>
+    new Date(d.getTime() + BEIJING_OFFSET_MS).toISOString().slice(0, 10)
+  const today = new Date()
+  const recentDays: string[] = []
+  for (let i = 29; i >= 0; i--) {
+    recentDays.push(dayKeyOf(new Date(today.getTime() - i * 24 * 60 * 60 * 1000)))
+  }
+  const recentDaySet = new Set(recentDays)
+
+  const [chat, image] = await Promise.all([
+    aggregateChat(userId, recentDays, recentDaySet, dayKeyOf),
+    aggregateImage(userId, recentDays, recentDaySet, dayKeyOf),
+  ])
+
+  return NextResponse.json({ chat, image })
+}
+
+// ── 聊天(token 维度) ───────────────────────────────────────────────────────
+async function aggregateChat(
+  userId: string,
+  recentDays: string[],
+  recentDaySet: Set<string>,
+  dayKeyOf: (d: Date) => string
+) {
   const messages = await prisma.message.findMany({
     where: {
       role: "assistant",
@@ -32,7 +62,6 @@ export async function GET() {
     },
   })
 
-  // ---- 聚合 ----
   let totalPrompt = 0
   let totalCompletion = 0
 
@@ -41,17 +70,6 @@ export async function GET() {
     { promptTokens: number; completionTokens: number; messages: number }
   >()
   const dayMap = new Map<string, number>()
-
-  // 最近 30 天日期序列(北京时间),保证无数据的天也出现在结果中
-  const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000
-  const dayKeyOf = (d: Date) =>
-    new Date(d.getTime() + BEIJING_OFFSET_MS).toISOString().slice(0, 10)
-  const today = new Date()
-  const recentDays: string[] = []
-  for (let i = 29; i >= 0; i--) {
-    recentDays.push(dayKeyOf(new Date(today.getTime() - i * 24 * 60 * 60 * 1000)))
-  }
-  const recentDaySet = new Set(recentDays)
   for (const day of recentDays) dayMap.set(day, 0)
 
   for (const m of messages) {
@@ -92,7 +110,7 @@ export async function GET() {
     totalTokens: dayMap.get(date) ?? 0,
   }))
 
-  return NextResponse.json({
+  return {
     totals: {
       promptTokens: totalPrompt,
       completionTokens: totalCompletion,
@@ -101,5 +119,63 @@ export async function GET() {
     },
     byModel,
     byDay,
+  }
+}
+
+// ── 生图(张数维度) ─────────────────────────────────────────────────────────
+async function aggregateImage(
+  userId: string,
+  recentDays: string[],
+  recentDaySet: Set<string>,
+  dayKeyOf: (d: Date) => string
+) {
+  // 仅取统计所需字段;历史量大时 groupBy 更高效,但 Prisma 不支持按日期分桶,先取后聚合
+  const images = await prisma.generatedImage.findMany({
+    where: { userId },
+    select: {
+      model: true,
+      size: true,
+      createdAt: true,
+    },
   })
+
+  const modelMap = new Map<string, { count: number }>()
+  const sizeMap = new Map<string, number>()
+  const dayMap = new Map<string, number>()
+  for (const day of recentDays) dayMap.set(day, 0)
+
+  for (const img of images) {
+    const modelKey = img.model || "未知模型"
+    const modelEntry = modelMap.get(modelKey) ?? { count: 0 }
+    modelEntry.count += 1
+    modelMap.set(modelKey, modelEntry)
+
+    const sizeKey = img.size || "未知尺寸"
+    sizeMap.set(sizeKey, (sizeMap.get(sizeKey) ?? 0) + 1)
+
+    const day = dayKeyOf(img.createdAt)
+    if (recentDaySet.has(day)) {
+      dayMap.set(day, (dayMap.get(day) ?? 0) + 1)
+    }
+  }
+
+  const byModel = Array.from(modelMap.entries())
+    .map(([model, v]) => ({ model, count: v.count }))
+    .sort((a, b) => b.count - a.count)
+
+  const bySize = Array.from(sizeMap.entries())
+    .map(([size, count]) => ({ size, count }))
+    .sort((a, b) => b.count - a.count)
+
+  const byDay = recentDays.map((date) => ({
+    date,
+    count: dayMap.get(date) ?? 0,
+  }))
+
+  return {
+    totals: { count: images.length },
+    byModel,
+    bySize,
+    byDay,
+  }
 }

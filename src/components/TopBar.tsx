@@ -1,10 +1,11 @@
 'use client'
 
-import { Menu, Settings as SettingsIcon, Plus } from 'lucide-react'
+import { Menu, Settings as SettingsIcon, Plus, Sparkles } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useChatStore } from '@/store/chat-store'
 import { useEffect, useState } from 'react'
 import { ThemeToggle } from './ThemeToggle'
+import { cn } from '@/lib/utils'
 
 export function TopBar() {
   const { toggleSidebar, setSettingsOpen, conversationTitle } = useChatStore()
@@ -17,10 +18,14 @@ export function TopBar() {
     setTitle(conversationTitle)
   }, [conversationTitle])
 
+  // 在 /images 页面显示固定的页面标题
+  const isImagesPage = pathname?.startsWith('/images')
+  const displayTitle = isImagesPage ? '生图工作台' : (title || '新对话')
+
   function handleNewChat() {
     // Same-route guard: when the router still thinks we're on /chat but the URL
     // was rewritten to /chat/c/[id] via history.replaceState, a push to /chat is
-    // a no-op. Hard-navigate to get a truly fresh chat panel.
+    // a no-op. Hard-navigate to a truly fresh chat panel.
     if (pathname === '/chat') {
       if (window.location.pathname !== '/chat') {
         window.location.href = '/chat'
@@ -28,6 +33,11 @@ export function TopBar() {
       return
     }
     router.push('/chat')
+  }
+
+  function handleGoImages() {
+    if (pathname?.startsWith('/images')) return
+    router.push('/images')
   }
 
   return (
@@ -48,12 +58,25 @@ export function TopBar() {
         >
           <Plus className="w-4 h-4 text-content-secondary" />
         </button>
+        <button
+          onClick={handleGoImages}
+          className={cn(
+            'p-1.5 rounded-lg transition-colors',
+            isImagesPage
+              ? 'bg-accent/15 text-accent'
+              : 'hover:bg-surface-subtle text-content-secondary'
+          )}
+          aria-label="生图工作台"
+          title="生图工作台"
+        >
+          <Sparkles className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Center: title */}
       <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none">
         <span className="text-xs font-medium text-content-muted">
-          {title || "新对话"}
+          {displayTitle}
         </span>
       </div>
 
@@ -71,3 +94,4 @@ export function TopBar() {
     </header>
   )
 }
+

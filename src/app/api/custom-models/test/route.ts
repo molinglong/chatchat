@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db"
 import {
   resolveApiKey,
   createCustomLanguageModel,
+  testCustomModelConnection,
+  detectCustomModelCapabilities,
   type CustomModelRow,
 } from "@/lib/ai/custom-model"
 
@@ -14,7 +16,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json()
-  const { id } = body
+  const { id, detectCapabilities } = body
 
   const userId = session.user.id
   let cmRecord: CustomModelRow
@@ -58,23 +60,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const apiKeyResolved = await resolveApiKey(userId, cmRecord)
-    const model = createCustomLanguageModel(cmRecord, apiKeyResolved)
-    const result = await import("ai").then((ai) =>
-      ai.generateText({
-        model,
-        prompt: "ping",
-        maxOutputTokens: 8,
-      })
-    )
-
-    if (result.response || result.text) {
-      return NextResponse.json({ ok: true })
+    const result = await testCustomModelConnection(userId, cmRecord)
+    if (!result.ok) {
+      return NextResponse.json(
+        { ok: false, error: result.error },
+        { status: 502 }
+      )
     }
-    return NextResponse.json(
-      { ok: false, error: "服务器无响应" },
-      { status: 502 }
-    )
+
+    // 连接成功 → 如有请求则额外检测能力
+    let capabilities: Awaited<ReturnType<typeof detectCustomModelCapabilities>> | undefined
+    if (detectCapabilities) {
+      try {
+        capabilities = await detectCustomModelCapabilities(userId, cmRecord)
+      } catch (err) {
+        console.error("[custom-model] Capability detection error:", err)
+        // 忽略检测错误，不影响连接测试结果
+      }
+    }
+
+    return NextResponse.json({ ok: true, capabilities })
   } catch (err) {
     const message = err instanceof Error ? err.message : "未知错误"
     const details = err && typeof err === "object" && "responseBody" in err

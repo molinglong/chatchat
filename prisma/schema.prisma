@@ -22,8 +22,12 @@ model User {
   conversations Conversation[]
   memories      Memory[]
   customModels  CustomModel[]
+  generatedImages GeneratedImage[]
   memoryEnabled Boolean   @default(true)
   clarifyEnabled Boolean  @default(true)
+  imageModel    String   @default("builtin:wanx2.1-t2i-turbo")
+  imageSize     String   @default("1024*1024")
+  imageModels   ImageModel[]
 }
 
 model Account {
@@ -124,6 +128,27 @@ model Memory {
   @@index([userId])
 }
 
+// 用户自定义生图模型(OpenAI 兼容文生图端点)
+model ImageModel {
+  id           String   @id @default(cuid())
+  userId       String
+  name         String   // 显示名称
+  modelId      String   // 实际模型标识,如 "dall-e-3" / "stable-diffusion-xl"
+  baseURL      String   // API 端点,如 https://api.openai.com/v1
+  apiKeySource String   @default("provider") // "provider" 复用服务商 Key | "own" 独立 Key
+  apiKey       String?  // 独立 API Key(加密),keySource=own 时使用
+  keyProvider  String?  // 复用哪个服务商的 Key,keySource=provider 时使用
+  contextWindow Int     @default(2048) // 备注/上下文限制
+  supportsSize Boolean  @default(true)  // 是否支持自定义尺寸
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, modelId])
+  @@index([userId])
+}
+
 // 用户自定义模型(OpenAI 兼容协议)
 model CustomModel {
   id               String   @id @default(cuid())
@@ -145,4 +170,23 @@ model CustomModel {
 
   @@unique([userId, modelId])
   @@index([userId])
+}
+
+// 用户通过"生图工作台"生成的图片记录
+model GeneratedImage {
+  id        String   @id @default(cuid())
+  userId    String
+  prompt    String   // 用户输入的提示词
+  url       String   // 相对路径,如 /uploads/wanx-xxx.png
+  model     String   @default("builtin:wanx2.1-t2i-turbo")
+  width     Int      @default(1024)
+  height    Int      @default(1024)
+  size      String   @default("1024*1024") // 生图请求时的尺寸参数(如 1024*1024 / 720*1280 / 1280*720)
+  // 关联来源: workspace = 来自生图工作台; chat = 来自对话中的 [IMG] 触发
+  source    String   @default("workspace")
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }

@@ -499,31 +499,45 @@ export async function POST(req: NextRequest) {
         savedReasoning = head || null
       }
 
-      // 检测 [IMG:...] 标记并调用通义万相生成图片(使用百炼/千问的 Key)
+      // 检测 [IMG:...] 标记并调用生图(自动根据用户选择的模型分发)
       const imagePrompts = extractImagePrompts(content)
       if (imagePrompts.length > 0) {
-        const dashKeyRecord = await prisma.apiKey.findUnique({
-          where: { userId_provider: { userId, provider: "qianwen" } },
+        const userRecord = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { imageModel: true, imageSize: true },
         })
-        if (dashKeyRecord) {
-          const dashKey = decrypt(dashKeyRecord.encryptedKey)
-          const replacements: string[] = []
-          for (const prompt of imagePrompts) {
-            try {
-              const localUrl = await generateImage(prompt, dashKey)
-              replacements.push(`![${prompt}](${localUrl})`)
-            } catch (err) {
-              const reason = err instanceof Error ? err.message : "未知原因"
-              console.error("[chat] Image generation failed:", reason)
-              replacements.push(`> ⚠️ 图片生成失败:${reason.replace(/\s+/g, " ")}`)
-            }
+        const modelId = userRecord?.imageModel ?? "builtin:wanx2.1-t2i-turbo"
+        const size = userRecord?.imageSize ?? "1024*1024"
+
+        const replacements: string[] = []
+        for (const prompt of imagePrompts) {
+          try {
+            const result = await generateImage(userId, modelId, prompt, size)
+            replacements.push(`![${prompt}](${result.url})`)
+            // 归档到生图历史库(source=chat),失败不阻塞对话保存
+            prisma.generatedImage
+              .create({
+                data: {
+                  userId,
+                  prompt,
+                  url: result.url,
+                  model: result.model,
+                  width: result.width,
+                  height: result.height,
+                  source: "chat",
+                },
+              })
+              .catch((err) => {
+                console.error("[chat] Failed to archive generated image:", err)
+              })
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : "未知原因"
+            console.error("[chat] Image generation failed:", reason)
+            replacements.push(`> ⚠️ 图片生成失败:${reason.replace(/\s+/g, " ")}`)
           }
-          let idx = 0
-          content = content.replace(IMG_MARKER_REGEX, () => replacements[idx++])
-        } else {
-          // 未配置通义千问(百炼)Key,静默移除标记
-          content = content.replace(IMG_MARKER_REGEX, "")
         }
+        let idx = 0
+        content = content.replace(IMG_MARKER_REGEX, () => replacements[idx++])
       }
       // 移除模型输出被截断时残留的未闭合标记(避免原始标记入库)
       content = content.replace(/\[IMG:[^\]]*$/g, "")
