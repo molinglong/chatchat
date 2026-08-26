@@ -1,71 +1,17 @@
 import { tool } from "ai"
 import { z } from "zod"
+import { executeQianfanSearch, type QianfanSearchResult } from "./search-engines/qianfan"
 
 /**
  * 百度千帆联网搜索工具
  * 使用百度千帆平台的搜索 API，为 AI 模型提供实时联网搜索能力。
  *
- * 千帆搜索 API 文档: https://cloud.baidu.com/doc/QIANFAN/s/...
- * 鉴权方式: 与文心一言共用千帆 API Key（Bearer Token）
+ * 官方文档: https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5
+ * 鉴权方式: AppBuilder API Key（独立于文心模型 Key）
+ * 实际执行逻辑抽离到 ./search-engines/qianfan.ts，便于被 /api/search/test 等其他模块复用。
  */
 
-interface SearchResultItem {
-  title: string
-  url: string
-  snippet: string
-}
-
-interface QianfanSearchResponse {
-  results?: Array<{
-    title?: string
-    url?: string
-    content?: string
-    abstract?: string
-    snippet?: string
-  }>
-  error_code?: number
-  error_msg?: string
-}
-
-/**
- * 调用百度千帆搜索 API 执行联网搜索
- */
-async function executeQianfanSearch(
-  query: string,
-  apiKey: string
-): Promise<SearchResultItem[]> {
-  // 千帆搜索 API 端点（v2 兼容模式）
-  const response = await fetch("https://qianfan.baidubce.com/v2/search", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      query,
-      top_n: 5,
-    }),
-  })
-
-  if (!response.ok) {
-    throw new Error(`百度搜索请求失败 (HTTP ${response.status})`)
-  }
-
-  const data: QianfanSearchResponse = await response.json()
-
-  if (data.error_code) {
-    throw new Error(
-      `百度搜索 API 错误: ${data.error_msg || "未知错误"} (code: ${data.error_code})`
-    )
-  }
-
-  const results = data.results ?? []
-  return results.map((r) => ({
-    title: r.title || "无标题",
-    url: r.url || "",
-    snippet: r.snippet || r.content || r.abstract || "",
-  }))
-}
+type SearchResultItem = QianfanSearchResult
 
 /**
  * 格式化搜索结果供 AI 模型阅读
@@ -100,7 +46,7 @@ function formatSearchResults(
 /**
  * 创建百度千帆联网搜索工具（AI SDK tool）
  *
- * @param apiKey - 千帆平台 API Key（与文心一言共用）
+ * @param apiKey - 百度千帆 AppBuilder API Key（联网搜索独立 Key，与模型 Key 分开配置）
  * @returns AI SDK tool 对象
  */
 export function createWebSearchTool(apiKey: string) {
@@ -115,7 +61,7 @@ export function createWebSearchTool(apiKey: string) {
     }),
     execute: async ({ query }) => {
       try {
-        const results = await executeQianfanSearch(query, apiKey)
+        const results = await executeQianfanSearch(query, apiKey, 5)
         return formatSearchResults(query, results)
       } catch (error) {
         const message =

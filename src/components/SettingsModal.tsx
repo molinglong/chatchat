@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw } from 'lucide-react'
+import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useChatStore } from '@/store/chat-store'
 import { StyleSlider } from '@/components/chat/StyleSlider'
@@ -130,7 +130,7 @@ const PROVIDER_URL: Record<string, string> = {
   yi: 'https://platform.lingyiwanwu.com/apikeys',
 }
 
-type SectionId = 'overview' | 'providers' | 'memory' | 'general' | 'help' | 'about' | 'usage' | 'image'
+type SectionId = 'overview' | 'providers' | 'search' | 'memory' | 'general' | 'help' | 'about' | 'usage' | 'image'
 
 type ThemeChoice = 'light' | 'dark' | 'system'
 
@@ -143,6 +143,7 @@ const THEME_OPTIONS: { value: ThemeChoice; label: string }[] = [
 const NAV_ITEMS: { id: SectionId; label: string; icon: typeof Key }[] = [
   { id: 'overview', label: '总览', icon: LayoutDashboard },
   { id: 'providers', label: '服务商 & 模型', icon: Key },
+  { id: 'search', label: '联网搜索', icon: Globe },
   { id: 'image', label: '生图', icon: ImageIcon },
   { id: 'memory', label: '记忆', icon: Brain },
   { id: 'usage', label: '用量统计', icon: BarChart3 },
@@ -216,6 +217,34 @@ export function SettingsModal() {
   const [imageFormOpen, setImageFormOpen] = useState(false)
   const [editingImageModelId, setEditingImageModelId] = useState<string | null>(null)
   const [cmFormOpen, setCmFormOpen] = useState(false)
+
+  // 联网搜索设置状态
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchTesting, setSearchTesting] = useState(false)
+  const [searchTestResult, setSearchTestResult] = useState<{
+    ok: boolean
+    items?: Array<{ title: string; url: string; snippet: string }>
+    error?: string
+  } | null>(null)
+
+  // 联网搜索 Key 状态（独立于服务商 Key）
+  interface SearchKeyInfo { id: string; engine: string; maskedKey: string; updatedAt: string }
+  const [searchKeys, setSearchKeys] = useState<SearchKeyInfo[]>([])
+  const [searchDraftKeys, setSearchDraftKeys] = useState<Record<string, string>>({})
+  const [searchKeySaving, setSearchKeySaving] = useState<Record<string, boolean>>({})
+  const [searchKeyDeleting, setSearchKeyDeleting] = useState<string | null>(null)
+  const [searchKeyShowPassword, setSearchKeyShowPassword] = useState<Record<string, boolean>>({})
+
+  // 加载联网搜索 Key 列表
+  useEffect(() => {
+    if (!settingsOpen) return
+    fetch('/api/search/keys')
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setSearchKeys(data)
+      })
+      .catch(() => {/* silently fail */})
+  }, [settingsOpen])
 
   // 生图设置自动保存：模型 + 尺寸变化时 PATCH
   const imageSettingsLoadedRef = useRef(false)
@@ -450,6 +479,77 @@ export function SettingsModal() {
       setTestResult((r) => ({ ...r, [providerId]: 'error' }))
     } finally {
       setTesting((t) => ({ ...t, [providerId]: false }))
+    }
+  }
+
+  async function handleSaveSearchKey(engine: string) {
+    const value = searchDraftKeys[engine]?.trim()
+    if (!value) return
+    setSearchKeySaving((s) => ({ ...s, [engine]: true }))
+    try {
+      const res = await fetch('/api/search/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine, apiKey: value }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || '保存失败')
+      }
+      setSearchDraftKeys((d) => { const n = { ...d }; delete n[engine]; return n })
+      setMessage({ type: 'success', text: '联网搜索 Key 已保存' })
+      const refreshed = await fetch('/api/search/keys').then((r) => r.json())
+      if (Array.isArray(refreshed)) setSearchKeys(refreshed)
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : '保存失败，请重试' })
+    } finally {
+      setSearchKeySaving((s) => ({ ...s, [engine]: false }))
+    }
+  }
+
+  async function handleDeleteSearchKey(engine: string) {
+    if (!confirm(`确定要删除 ${engine} 联网搜索 Key 吗？`)) return
+    setSearchKeyDeleting(engine)
+    try {
+      const res = await fetch('/api/search/keys', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine }),
+      })
+      if (!res.ok) throw new Error('删除失败')
+      setSearchKeys((prev) => prev.filter((k) => k.engine !== engine))
+      setMessage({ type: 'success', text: '联网搜索 Key 已删除' })
+    } catch {
+      setMessage({ type: 'error', text: '删除失败，请重试' })
+    } finally {
+      setSearchKeyDeleting(null)
+    }
+  }
+
+  async function handleTestSearch() {
+    const q = searchQuery.trim()
+    if (!q) {
+      setMessage({ type: 'error', text: '请输入搜索关键词' })
+      return
+    }
+    setSearchTesting(true)
+    setSearchTestResult(null)
+    try {
+      const res = await fetch('/api/search/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '测试失败')
+      setSearchTestResult({ ok: true, items: data.items })
+    } catch (err) {
+      setSearchTestResult({
+        ok: false,
+        error: err instanceof Error ? err.message : '搜索失败',
+      })
+    } finally {
+      setSearchTesting(false)
     }
   }
 
@@ -865,7 +965,8 @@ export function SettingsModal() {
             获取 Key
           </a>
         )}
-      </div>
+
+              </div>
     )
   }
 
@@ -1122,6 +1223,172 @@ export function SettingsModal() {
             {/* 其他页面内容 */}
             {activeSection !== 'overview' && !loading && (
               <>
+                {/* 联网搜索 */}
+                {activeSection === 'search' && (() => {
+                  const qianfanKey = searchKeys.find((k) => k.engine === 'qianfan')
+                  const qianfanDraft = searchDraftKeys['qianfan'] ?? ''
+                  const qianfanSaving = searchKeySaving['qianfan'] ?? false
+                  const qianfanDeleting = searchKeyDeleting === 'qianfan'
+                  const qianfanPasswordVisible = searchKeyShowPassword['qianfan'] ?? false
+                  return (
+                    <div className="space-y-3">
+
+                      {/* 引擎 Key 配置卡片 */}
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <Globe className="w-4 h-4 text-content-secondary" />
+                          <p className="text-xs font-semibold text-content-primary">百度千帆</p>
+                          {qianfanKey && (
+                            <span className="ml-auto text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
+                              已配置
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-content-secondary leading-relaxed">
+                          独立 API Key，与服务商 Key 无关，需单独申请。
+                          <a
+                            href="https://cloud.baidu.com/doc/QIANFAN/s/3l6bavkfm"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-1 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5"
+                          >
+                            申请地址 <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        </p>
+
+                        {/* 已配置的 Key 显示 */}
+                        {qianfanKey && (
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-surface-muted/80 border border-line/40">
+                              <Key className="w-3.5 h-3.5 text-content-muted shrink-0" />
+                              <code className="text-xs text-content-secondary truncate">{qianfanKey.maskedKey}</code>
+                            </div>
+                            <button
+                              onClick={() => handleDeleteSearchKey('qianfan')}
+                              disabled={qianfanDeleting}
+                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                            >
+                              {qianfanDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                              删除
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 输入框 */}
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              type={qianfanPasswordVisible ? 'text' : 'password'}
+                              value={qianfanDraft}
+                              onChange={(e) => setSearchDraftKeys((d) => ({ ...d, qianfan: e.target.value }))}
+                              placeholder={qianfanKey ? '输入新 Key 替换...' : '粘贴 API Key...'}
+                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 pr-8 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setSearchKeyShowPassword((s) => ({ ...s, qianfan: !s['qianfan'] }))}
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-content-muted hover:text-content-primary transition-colors"
+                              tabIndex={-1}
+                            >
+                              {qianfanPasswordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => handleSaveSearchKey('qianfan')}
+                            disabled={!qianfanDraft.trim() || qianfanSaving}
+                            className={cn(
+                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                              qianfanDraft.trim() && !qianfanSaving
+                                ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
+                                : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                            )}
+                          >
+                            {qianfanSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            保存
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 工作原理 */}
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-content-secondary" />
+                          <p className="text-xs font-medium text-content-secondary">工作原理</p>
+                        </div>
+                        <ul className="text-[11px] text-content-secondary space-y-1.5 leading-relaxed">
+                          <li>· 配置 Key 后，AI 模型拥有 web_search 工具调用能力</li>
+                          <li>· 当 AI 判断需要实时信息时（新闻、数据、最新事件），自动搜索</li>
+                          <li>· 通过百度千帆搜索 API 返回结果，AI 基于真实数据作答</li>
+                          <li>· 支持追问、多轮搜索，结果自动注入对话上下文</li>
+                        </ul>
+                      </div>
+
+                      {/* 测试搜索 */}
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <Search className="w-3.5 h-3.5 text-content-secondary" />
+                          <p className="text-xs font-medium text-content-secondary">测试搜索</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleTestSearch() }}
+                            placeholder="输入关键词，如：今天上海天气"
+                            disabled={!qianfanKey || searchTesting}
+                            className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 disabled:opacity-50"
+                          />
+                          <button
+                            onClick={handleTestSearch}
+                            disabled={!qianfanKey || searchTesting || !searchQuery.trim()}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-accent text-white hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {searchTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                            搜索
+                          </button>
+                        </div>
+
+                        {searchTestResult && (
+                          <div className={cn(
+                            'rounded-lg px-2.5 py-2 text-[11px]',
+                            searchTestResult.ok
+                              ? 'bg-green-50 dark:bg-green-900/20 border border-green-200/60'
+                              : 'bg-red-50 dark:bg-red-900/20 border border-red-200/60'
+                          )}>
+                            {searchTestResult.ok ? (
+                              searchTestResult.items && searchTestResult.items.length > 0 ? (
+                                <ul className="space-y-2">
+                                  {searchTestResult.items.map((item, i) => (
+                                    <li key={i} className="leading-relaxed">
+                                      <a
+                                        href={item.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                                      >
+                                        [{i + 1}] {item.title}
+                                      </a>
+                                      {item.snippet && (
+                                        <p className="text-content-secondary mt-0.5">{item.snippet}</p>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="text-content-secondary">搜索成功但未返回结果。</p>
+                              )
+                            ) : (
+                              <p className="text-red-700 dark:text-red-300">{searchTestResult.error}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 {/* 生图 */}
                 {activeSection === 'image' && (
                   <div className="space-y-3">

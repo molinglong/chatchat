@@ -25,7 +25,7 @@
 
 export type ImageProvider = "qianwen" | "openai" | "stability"
 
-export type ImageAdapter = "qianwen" | "openai" | "stability"
+export type ImageAdapter = "qianwen" | "qianwen-edit" | "openai" | "stability"
 
 export interface BuiltinImageModel {
   id: string
@@ -38,6 +38,8 @@ export interface BuiltinImageModel {
   supportsSize: boolean
   desc: string
   badge?: string
+  /** 是否支持二创(img2img / inpaint);二创模型不在主生成器中显示 */
+  supportsEdit?: boolean
 }
 
 export const BUILTIN_IMAGE_MODELS: BuiltinImageModel[] = [
@@ -97,6 +99,20 @@ export const BUILTIN_IMAGE_MODELS: BuiltinImageModel[] = [
     supportsSize: true,
     desc: "Stability AI 开源模型",
     badge: "stability",
+  },
+  {
+    // 二次创作专用模型(千问 image-edit):支持以图生图 + 局部重绘 + 变体
+    // 不在「主生成」下拉中显示,仅在预览标题栏的「二创」面板里出现
+    id: "builtin:qwen-image-edit",
+    name: "通义千问 · 图像编辑",
+    provider: "qianwen",
+    adapter: "qianwen-edit",
+    modelId: "qwen-image-edit",
+    sizes: ["1024*1024", "720*1280", "1280*720"],
+    supportsSize: false,
+    desc: "以图生图、局部重绘、生成变体",
+    badge: "edit",
+    supportsEdit: true,
   },
 ]
 

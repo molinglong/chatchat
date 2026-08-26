@@ -132,9 +132,12 @@ export function ModelSelector({
               ? 'absolute bottom-full left-0 mb-1 z-50'
               : 'absolute top-full left-0 mt-1 z-50',
             'min-w-[180px] max-h-[260px] overflow-y-auto',
-            'bg-surface-glass backdrop-blur-xl rounded-lg shadow-lg',
-            'border border-line/60',
-            'py-1'
+            'bg-black/30 dark:bg-white/10 backdrop-blur-2xl',
+            'rounded-xl',
+            'shadow-[0_8px_32px_rgba(0,0,0,0.25),0_2px_8px_rgba(0,0,0,0.12)]',
+            'border border-white/10 dark:border-white/8',
+            'py-1',
+            'animate-in fade-in zoom-in-95 duration-150'
           )}
         >
           {Object.keys(grouped).length > 0 ? (

@@ -23,6 +23,7 @@ model User {
   memories      Memory[]
   customModels  CustomModel[]
   generatedImages GeneratedImage[]
+  searchApiKeys  SearchApiKey[]
   memoryEnabled Boolean   @default(true)
   clarifyEnabled Boolean  @default(true)
   imageModel    String   @default("builtin:wanx2.1-t2i-turbo")
@@ -184,9 +185,36 @@ model GeneratedImage {
   size      String   @default("1024*1024") // 生图请求时的尺寸参数(如 1024*1024 / 720*1280 / 1280*720)
   // 关联来源: workspace = 来自生图工作台; chat = 来自对话中的 [IMG] 触发
   source    String   @default("workspace")
+  // 二创链路: parentId 指向被修改的原图,null = 首次生成
+  parentId  String?
+  // 生成方式: t2i(文生图) | edit(以图生图/img2img) | inpaint(局部重绘) | variation(变体)
+  editType  String   @default("t2i")
+  // inpaint 用: 涂抹区域相对原图的归一化坐标 JSON,形如 {"x":0.1,"y":0.2,"w":0.3,"h":0.4}
+  maskRect  String?
+  // 文生图时用户上传的参考图(相对路径 /uploads/xxx.png),null = 纯文生图
+  referenceImageUrl String?
   createdAt DateTime @default(now())
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent   GeneratedImage?  @relation("ImageDerivation", fields: [parentId], references: [id], onDelete: SetNull)
+  children GeneratedImage[] @relation("ImageDerivation")
+
+  @@index([userId, createdAt])
+  @@index([parentId])
+}
+
+// 联网搜索 API Key（独立于模型 ApiKey 表）
+// 目前支持：qianfan（百度千帆）
+model SearchApiKey {
+  id           String   @id @default(cuid())
+  userId       String
+  engine       String   // qianfan | tavily | ...
+  encryptedKey String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId, createdAt])
+  @@unique([userId, engine])
+  @@index([userId])
 }

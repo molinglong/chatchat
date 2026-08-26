@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
@@ -17,6 +17,10 @@ export interface ChatInputProps {
   onModelChange: (modelId: string) => void
   deepThink: boolean
   onDeepThinkChange: (enabled: boolean) => void
+  /** 联网搜索（基于百度千帆）。需要在设置中配置 SearchApiKey。 */
+  webSearch?: boolean
+  onWebSearchChange?: (enabled: boolean) => void
+  webSearchAvailable?: boolean
   // 对比模式
   compareMode?: boolean
   compareModeAvailable?: boolean
@@ -35,6 +39,9 @@ export function ChatInput({
   onModelChange,
   deepThink,
   onDeepThinkChange,
+  webSearch = false,
+  onWebSearchChange,
+  webSearchAvailable = false,
   compareMode = false,
   compareModeAvailable = false,
   onCompareModeChange,
@@ -296,6 +303,29 @@ export function ChatInput({
               >
                 深度思考
               </button>
+              {onWebSearchChange && (
+                <button
+                  onClick={() => onWebSearchChange(!webSearch)}
+                  disabled={isLoading || !webSearchAvailable}
+                  className={cn(
+                    'inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors',
+                    webSearch
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
+                    (isLoading || !webSearchAvailable) && 'opacity-50 cursor-not-allowed'
+                  )}
+                  title={
+                    webSearchAvailable
+                      ? '智能搜索：开启后 AI 会主动调用千帆搜索获取实时信息'
+                      : '请先在【设置 → 联网搜索】中配置百度千帆 AppBuilder API Key'
+                  }
+                  aria-label="智能搜索"
+                  aria-pressed={webSearch}
+                >
+                  <Globe className="w-3 h-3" />
+                  智能搜索
+                </button>
+              )}
               {compareModeAvailable && onCompareModeChange && (
                 <button
                   onClick={() => onCompareModeChange(!compareMode)}

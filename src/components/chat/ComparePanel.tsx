@@ -22,6 +22,10 @@ interface ComparePanelProps {
   styleOffset: number
   deepThink: boolean
   onDeepThinkChange: (enabled: boolean) => void
+  /** 联网搜索(对比模式下所有泳道共享一个开关) */
+  webSearch: boolean
+  onWebSearchChange: (enabled: boolean) => void
+  webSearchAvailable: boolean
   /** 关闭对比模式(仅新对话时可关闭,由父级提供) */
   onCompareModeChange?: (enabled: boolean) => void
   compareModeAvailable?: boolean
@@ -37,6 +41,9 @@ export function ComparePanel({
   styleOffset,
   deepThink,
   onDeepThinkChange,
+  webSearch,
+  onWebSearchChange,
+  webSearchAvailable,
   onCompareModeChange,
   compareModeAvailable,
   onConversationCreated,
@@ -228,6 +235,7 @@ export function ComparePanel({
                   attachmentsRef={attachmentsRef}
                   styleOffset={styleOffset}
                   deepThink={deepThink}
+                  webSearch={webSearch}
                   onConvIdFromHeader={handleConvIdFromHeader}
                   registerApi={(api) => registerApi(modelId, api)}
                   onLoadingChange={(loading) => handleLoadingChange(modelId, loading)}
@@ -253,6 +261,9 @@ export function ComparePanel({
         onModelChange={() => {}}
         deepThink={deepThink}
         onDeepThinkChange={onDeepThinkChange}
+        webSearch={webSearch}
+        onWebSearchChange={onWebSearchChange}
+        webSearchAvailable={webSearchAvailable}
         compareMode
         compareModeAvailable={compareModeAvailable}
         onCompareModeChange={onCompareModeChange}

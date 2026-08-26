@@ -16,6 +16,7 @@ import type { Attachment } from './FileUpload'
 
 const MODEL_STORAGE_KEY = 'chat:selectedModel'
 const DEEP_THINK_STORAGE_KEY = 'chat:deepThink'
+const WEB_SEARCH_STORAGE_KEY = 'chat:webSearch'
 const COMPARE_MODE_STORAGE_KEY = 'chat:compareMode'
 const COMPARE_MODELS_STORAGE_KEY = 'chat:compareModels'
 
@@ -96,6 +97,28 @@ export function ChatPanel({
   // Auto-enable deepThink for reasoning models (like DeepSeek-R1), but allow user to toggle off
   const shouldAutoEnableDeepThink = initialModel && allModels.find(m => m.id === initialModel)?.supportsReasoning
   const [deepThink, setDeepThink] = useState(shouldAutoEnableDeepThink || false)
+
+  // 联网搜索：默认关闭，仅在用户在 ChatInput 中主动开启时才把 web_search 工具挂到模型。
+  // 需要后端 /api/search/keys 验证用户是否配置了 SearchApiKey（webSearchAvailable）。
+  const [webSearch, setWebSearch] = useState(false)
+  const [webSearchAvailable, setWebSearchAvailable] = useState(false)
+  useEffect(() => {
+    fetch('/api/search/keys')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: Array<{ engine: string }>) => {
+        if (Array.isArray(data)) {
+          setWebSearchAvailable(data.some((k) => k.engine === 'qianfan'))
+        }
+      })
+      .catch(() => setWebSearchAvailable(false))
+  }, [])
+
+  // 从 localStorage 恢复 webSearch 偏好
+  useEffect(() => {
+    if (!initialConversationId && localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true') {
+      setWebSearch(true)
+    }
+  }, [initialConversationId])
   
   // Sync deepThink state with model changes - auto-enable for reasoning models
   useEffect(() => {
@@ -207,13 +230,14 @@ export function ChatPanel({
   // Keep ref in sync
   conversationIdRef.current = conversationId
 
-  // Create transport with current model, conversationId, and deepThink
+  // Create transport with current model, conversationId, deepThink, and webSearch
   const transport = new DefaultChatTransport<UIMessage>({
     api: '/api/chat',
     body: {
       model: currentModel,
       conversationId: conversationId,
       deepThink,
+      webSearch,
       styleOffset: conversationStyleOffset,
       // Attachments are read from ref at send time
       get attachments() {
@@ -335,6 +359,11 @@ export function ChatPanel({
     localStorage.setItem(DEEP_THINK_STORAGE_KEY, String(enabled))
   }, [])
 
+  const handleWebSearchChange = useCallback((enabled: boolean) => {
+    setWebSearch(enabled)
+    localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(enabled))
+  }, [])
+
   const handleRetry = useCallback(() => {
     clearError()
     regenerate()
@@ -386,6 +415,9 @@ export function ChatPanel({
         styleOffset={conversationStyleOffset}
         deepThink={deepThink}
         onDeepThinkChange={handleDeepThinkChange}
+        webSearch={webSearch}
+        onWebSearchChange={handleWebSearchChange}
+        webSearchAvailable={webSearchAvailable}
         onCompareModeChange={handleCompareModeChange}
         compareModeAvailable={!conversationId}
         onConversationCreated={handleCompareConversationCreated}
@@ -467,6 +499,9 @@ export function ChatPanel({
         onModelChange={handleModelChange}
         deepThink={deepThink}
         onDeepThinkChange={handleDeepThinkChange}
+        webSearch={webSearch}
+        onWebSearchChange={handleWebSearchChange}
+        webSearchAvailable={webSearchAvailable}
         compareMode={false}
         compareModeAvailable={!conversationId}
         onCompareModeChange={handleCompareModeChange}

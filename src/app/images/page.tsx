@@ -2,8 +2,25 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import Image from 'next/image'
-import { Loader2, Sparkles, Trash2, Download, Copy, X, ChevronDown, Check } from 'lucide-react'
+import {
+  Loader2,
+  Sparkles,
+  Trash2,
+  Download,
+  Copy,
+  X,
+  ChevronDown,
+  Check,
+  Wand2,
+  Brush,
+  Layers,
+  ChevronRight,
+  Grid3x3,
+  ImagePlus,
+  Upload,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { deleteUploadedFile } from '@/components/chat/FileUpload'
 
 interface GeneratedImage {
   id: string
@@ -14,10 +31,15 @@ interface GeneratedImage {
   height: number
   source: string
   createdAt: string
+  parentId?: string | null
+  editType?: string
+  referenceImageUrl?: string | null
 }
 
+type EditTab = 'edit' | 'inpaint' | 'variation'
+type MaskRect = { x: number; y: number; w: number; h: number } // 归一化坐标 0~1
+
 const PAGE_SIZE = 24
-// 推荐的提示词(快捷填充,降低首次使用门槛)
 const PROMPT_PRESETS = [
   '赛博朋克风格的城市夜景,霓虹灯,雨后街道',
   '一只可爱的橘猫坐在窗台,水彩画风格',
@@ -34,24 +56,29 @@ export default function ImagesPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [total, setTotal] = useState(0)
-  const [preview, setPreview] = useState<GeneratedImage | null>(null)
   const [imageSettings, setImageSettings] = useState({
     model: 'builtin:wanx2.1-t2i-turbo',
     size: '1024*1024',
     builtinModels: [] as Record<string, unknown>[],
     customModels: [] as Record<string, unknown>[],
   })
-  // 视图模式: gallery(网格缩略图) | preview(刚生成完的大图预览)
   const [viewMode, setViewMode] = useState<'gallery' | 'preview'>('gallery')
   const [latestGeneratedId, setLatestGeneratedId] = useState<string | null>(null)
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
   const [switchingModel, setSwitchingModel] = useState(false)
   const [switchingSize, setSwitchingSize] = useState(false)
+  // 参考图:工作台「上传一张图作为生成参考」,最多 1 张,持久化在 /uploads
+  const [referenceImage, setReferenceImage] = useState<{
+    url: string
+    name: string
+    size: number
+  } | null>(null)
+  const [referenceUploading, setReferenceUploading] = useState(false)
+  const [referenceError, setReferenceError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const modelDropRef = useRef<HTMLDivElement | null>(null)
 
-  // 点击外部关闭模型下拉
   useEffect(() => {
     if (!modelDropdownOpen) return
     function onPointerDown(e: PointerEvent) {
@@ -63,7 +90,6 @@ export default function ImagesPage() {
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [modelDropdownOpen])
 
-  // 自动撑高 textarea
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
@@ -82,13 +108,14 @@ export default function ImagesPage() {
 
   useEffect(() => {
     setLoadingList(true)
-    fetchPage(0, false).catch((err) => {
-      console.error(err)
-      setError(err instanceof Error ? err.message : '加载失败')
-    }).finally(() => setLoadingList(false))
+    fetchPage(0, false)
+      .catch((err) => {
+        console.error(err)
+        setError(err instanceof Error ? err.message : '加载失败')
+      })
+      .finally(() => setLoadingList(false))
   }, [fetchPage])
 
-  // 加载生图设置
   useEffect(() => {
     fetch('/api/image-settings')
       .then((r) => r.json())
@@ -103,19 +130,38 @@ export default function ImagesPage() {
       .catch(() => {})
   }, [])
 
-  // 滚动到底部自动加载更多
+  // 监听:用户上传了参考图,但当前模型不支持 → 自动切换到 qwen-image-edit
+  useEffect(() => {
+    if (!referenceImage) return
+    const allModels = [...imageSettings.builtinModels, ...imageSettings.customModels]
+    const current = allModels.find((m) => m.id === imageSettings.model)
+    // 支持参考图的判断:
+    //  - 内置模型:supportsEdit = true
+    //  - 自定义模型(provider === 'custom'):一律视为支持(后端会按中转站 OpenAI 格式处理)
+    const provider = (current as { provider?: string } | undefined)?.provider
+    const supportsEdit = !!(current as { supportsEdit?: boolean } | undefined)?.supportsEdit
+    const supportsRef = provider === 'custom' || supportsEdit
+    if (supportsRef) return
+    if (switchingModel) return
+    handleSwitchModel('builtin:qwen-image-edit')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [referenceImage])
+
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
-    const observer = new IntersectionObserver((entries) => {
-      const first = entries[0]
-      if (first.isIntersecting && hasMore && !loadingMore && !loadingList) {
-        setLoadingMore(true)
-        fetchPage(images.length, true)
-          .catch((err) => console.error(err))
-          .finally(() => setLoadingMore(false))
-      }
-    }, { rootMargin: '200px' })
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0]
+        if (first.isIntersecting && hasMore && !loadingMore && !loadingList) {
+          setLoadingMore(true)
+          fetchPage(images.length, true)
+            .catch((err) => console.error(err))
+            .finally(() => setLoadingMore(false))
+        }
+      },
+      { rootMargin: '200px' }
+    )
     observer.observe(el)
     return () => observer.disconnect()
   }, [hasMore, loadingMore, loadingList, images.length, fetchPage])
@@ -126,10 +172,17 @@ export default function ImagesPage() {
     setGenerating(true)
     setError(null)
     try {
+      const body: Record<string, unknown> = {
+        prompt: text,
+        source: 'workspace',
+      }
+      if (referenceImage) {
+        body.referenceImageUrl = referenceImage.url
+      }
       const res = await fetch('/api/images', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text, source: 'workspace' }),
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -141,11 +194,60 @@ export default function ImagesPage() {
       setLatestGeneratedId(record.id)
       setViewMode('preview')
       setPrompt('')
+      // 生成成功后清空参考图(避免误用在下一轮)
+      if (referenceImage) {
+        deleteUploadedFile(referenceImage.url)
+        setReferenceImage(null)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成失败')
     } finally {
       setGenerating(false)
     }
+  }
+
+  async function handleReferencePick(file: File) {
+    if (referenceUploading || referenceImage) return
+    if (!file.type.startsWith('image/')) {
+      setReferenceError('只支持图片文件')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setReferenceError('文件不能超过 10MB')
+      return
+    }
+    setReferenceUploading(true)
+    setReferenceError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch('/api/upload', { method: 'POST', body: form })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `上传失败 (HTTP ${res.status})`)
+      }
+      const data = (await res.json()) as { url: string; name: string; size: number }
+      setReferenceImage({ url: data.url, name: data.name, size: data.size })
+    } catch (err) {
+      setReferenceError(err instanceof Error ? err.message : '上传失败')
+    } finally {
+      setReferenceUploading(false)
+    }
+  }
+
+  function handleReferenceRemove() {
+    if (!referenceImage) return
+    deleteUploadedFile(referenceImage.url)
+    setReferenceImage(null)
+    setReferenceError(null)
+  }
+
+  /** 二创完成:把生成的若干张插到画廊顶部 + 切到预览视图显示主图 */
+  function handleEditComplete(primary: GeneratedImage, all: GeneratedImage[]) {
+    setImages((prev) => [...all, ...prev])
+    setTotal((n) => n + all.length)
+    setLatestGeneratedId(primary.id)
+    setViewMode('preview')
   }
 
   async function handleDelete(id: string) {
@@ -157,22 +259,19 @@ export default function ImagesPage() {
       setTotal((n) => Math.max(0, n - 1))
       setLatestGeneratedId((prev) => (prev === id ? null : prev))
       setViewMode((prev) => (prev === 'preview' && latestGeneratedId === id ? 'gallery' : prev))
-      if (preview?.id === id) setPreview(null)
     } catch (err) {
       alert(err instanceof Error ? err.message : '删除失败')
     }
   }
 
   function handleCopyPrompt(text: string) {
-    navigator.clipboard.writeText(text).catch(() => {
-      // ignore
-    })
+    navigator.clipboard.writeText(text).catch(() => {})
   }
 
   function handleDownload(img: GeneratedImage) {
     const a = document.createElement('a')
     a.href = img.url
-    a.download = `wanx-${img.id}.png`
+    a.download = `aichat-${img.id}.png`
     a.target = '_blank'
     document.body.appendChild(a)
     a.click()
@@ -220,11 +319,9 @@ export default function ImagesPage() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* 顶部标题栏 */}
       <div className="px-4 py-3 border-b border-line/50 flex items-center gap-2 shrink-0 relative">
         <Sparkles className="w-4 h-4 text-accent" />
         <h2 className="text-sm font-semibold">生图工作台</h2>
-        {/* 模型选择器 */}
         <div className="ml-auto relative" ref={modelDropRef}>
           <button
             onClick={() => setModelDropdownOpen((o) => !o)}
@@ -242,7 +339,12 @@ export default function ImagesPage() {
                 return current ? (current.name as string) : imageSettings.model
               })()}
             </span>
-            <ChevronDown className={cn('w-3 h-3 shrink-0 transition-transform', modelDropdownOpen && 'rotate-180')} />
+            <ChevronDown
+              className={cn(
+                'w-3 h-3 shrink-0 transition-transform',
+                modelDropdownOpen && 'rotate-180'
+              )}
+            />
           </button>
 
           {modelDropdownOpen && (
@@ -254,6 +356,7 @@ export default function ImagesPage() {
                   </div>
                   {imageSettings.builtinModels.map((m) => {
                     const isActive = m.id === imageSettings.model
+                    const supportsEdit = !!(m as Record<string, unknown>).supportsEdit
                     return (
                       <button
                         key={m.id as string}
@@ -264,9 +367,17 @@ export default function ImagesPage() {
                         )}
                       >
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{(m as Record<string, unknown>).name as string}</div>
+                          <div className="font-medium truncate flex items-center gap-1">
+                            <span>{(m as Record<string, unknown>).name as string}</span>
+                            {supportsEdit && (
+                              <span className="px-1 py-px rounded text-[9px] bg-accent/15 text-accent">
+                                参考图
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[10px] text-content-muted mt-0.5 truncate">
-                            {((m as Record<string, unknown>).desc as string) || ((m as Record<string, unknown>).modelId as string)}
+                            {((m as Record<string, unknown>).desc as string) ||
+                              ((m as Record<string, unknown>).modelId as string)}
                           </div>
                         </div>
                         {isActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
@@ -293,9 +404,12 @@ export default function ImagesPage() {
                         )}
                       >
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{(m as Record<string, unknown>).name as string}</div>
+                          <div className="font-medium truncate">
+                            {(m as Record<string, unknown>).name as string}
+                          </div>
                           <div className="text-[10px] text-content-muted mt-0.5 truncate">
-                            {((m as Record<string, unknown>).modelId as string) || ((m as Record<string, unknown>).baseURL as string)}
+                            {((m as Record<string, unknown>).modelId as string) ||
+                              ((m as Record<string, unknown>).baseURL as string)}
                           </div>
                         </div>
                         {isActive && <Check className="w-3 h-3 shrink-0 text-accent" />}
@@ -305,9 +419,7 @@ export default function ImagesPage() {
                 </>
               )}
               {imageSettings.builtinModels.length === 0 && imageSettings.customModels.length === 0 && (
-                <div className="px-3 py-4 text-xs text-content-muted text-center">
-                  加载中...
-                </div>
+                <div className="px-3 py-4 text-xs text-content-muted text-center">加载中...</div>
               )}
             </div>
           )}
@@ -315,7 +427,6 @@ export default function ImagesPage() {
       </div>
 
       <div className="flex-1 flex flex-col lg:grid lg:grid-cols-[40%_1fr] min-h-0 overflow-hidden">
-        {/* 左侧:输入栏 */}
         <aside className="w-full shrink-0 border-b lg:border-b-0 lg:border-r border-line/50 p-4 flex flex-col gap-3 overflow-y-auto">
           <div>
             <label className="text-xs text-content-secondary font-medium">提示词</label>
@@ -339,9 +450,67 @@ export default function ImagesPage() {
             </div>
           </div>
 
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs text-content-secondary font-medium">
+                参考图 <span className="text-content-muted font-normal">(可选)</span>
+              </label>
+              {referenceImage && (
+                <button
+                  onClick={handleReferenceRemove}
+                  className="text-[11px] text-content-muted hover:text-red-500 transition-colors"
+                  type="button"
+                >
+                  移除
+                </button>
+              )}
+            </div>
+            <ReferenceImageDropZone
+              image={referenceImage}
+              uploading={referenceUploading}
+              onPick={handleReferencePick}
+            />
+            {(() => {
+              const allModels = [...imageSettings.builtinModels, ...imageSettings.customModels]
+              const current = allModels.find((m) => m.id === imageSettings.model)
+              const provider = (current as { provider?: string } | undefined)?.provider
+              const supportsEdit = !!(current as { supportsEdit?: boolean } | undefined)?.supportsEdit
+              const supportsRef = provider === 'custom' || supportsEdit
+              if (!referenceImage) {
+                return (
+                  <div className="mt-1.5 text-[11px] text-content-muted leading-relaxed">
+                    上传一张图,模型会参考它的风格/构图来生成新图。
+                  </div>
+                )
+              }
+              if (!supportsRef) {
+                return (
+                  <div className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">
+                    当前模型「{(current as { name?: string } | undefined)?.name}」不支持参考图,生成时将自动切换到「通义千问 · 图像编辑」。
+                  </div>
+                )
+              }
+              return (
+                <div className="mt-1.5 text-[11px] text-content-muted leading-relaxed">
+                  将以「{(current as { name?: string } | undefined)?.name}」执行参考图生图。
+                </div>
+              )
+            })()}
+            {referenceError && (
+              <div className="mt-1.5 text-[11px] text-red-600 dark:text-red-400">
+                {referenceError}
+              </div>
+            )}
+          </div>
+
           <button
             onClick={handleGenerate}
-            disabled={!prompt.trim() || generating}
+            disabled={
+              !prompt.trim() ||
+              generating ||
+              referenceUploading ||
+              (!referenceImage && false)
+            }
             className={cn(
               'w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium',
               'bg-accent text-accent-foreground hover:bg-accent-hover',
@@ -356,12 +525,11 @@ export default function ImagesPage() {
             ) : (
               <>
                 <Sparkles className="w-3.5 h-3.5" />
-                生成图片
+                {referenceImage ? '参考图生图' : '生成图片'}
               </>
             )}
           </button>
 
-          {/* 图片尺寸选择 */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs text-content-secondary font-medium">图片尺寸</label>
@@ -418,10 +586,12 @@ export default function ImagesPage() {
             <p>· 首次使用请在「设置 → 服务商」配置千问/百炼密钥</p>
             <p>· 模型和尺寸可在工作台顶部直接切换</p>
             <p>· 对话中用 [IMG:描述] 触发的图片也会自动归档到这里</p>
+            <p>· 生成完成后,大图标题栏点 🔁 二次创作(以图生图/局部重绘/变体)</p>
+            <p>· 缩略图右键也能二创</p>
+            <p>· 上传参考图 → 选择「通义千问 · 图像编辑」→ 让模型参考其风格/构图生图</p>
           </div>
         </aside>
 
-        {/* 右侧:历史画廊 */}
         <div className="flex-1 min-w-0 overflow-y-auto p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium text-content-secondary">
@@ -439,16 +609,18 @@ export default function ImagesPage() {
               <p>还没有生图记录,左侧输入提示词开始吧</p>
             </div>
           ) : viewMode === 'preview' && latestGeneratedId ? (
-            // 大图预览模式:生成完毕或用户切到此模式时显示
             (() => {
               const target = images.find((img) => img.id === latestGeneratedId) ?? images[0]
               return target ? (
                 <PreviewView
                   image={target}
+                  allImages={images}
                   onClose={() => setViewMode('gallery')}
                   onDelete={() => handleDelete(target.id)}
                   onCopyPrompt={() => handleCopyPrompt(target.prompt)}
-                  onPreview={() => setPreview(target)}
+                  onEditComplete={handleEditComplete}
+                  onNavigate={(img) => setLatestGeneratedId(img.id)}
+                  onDownload={handleDownload}
                 />
               ) : null
             })()
@@ -458,7 +630,10 @@ export default function ImagesPage() {
                 <ImageCard
                   key={img.id}
                   image={img}
-                  onPreview={() => setPreview(img)}
+                  onPreview={() => {
+                    setLatestGeneratedId(img.id)
+                    setViewMode('preview')
+                  }}
                   onDelete={() => handleDelete(img.id)}
                   onCopyPrompt={() => handleCopyPrompt(img.prompt)}
                 />
@@ -466,98 +641,463 @@ export default function ImagesPage() {
             </div>
           )}
 
-          {/* 加载更多触发器 */}
-          <div ref={sentinelRef} className="h-8 mt-2 flex items-center justify-center text-xs text-content-muted">
+          <div
+            ref={sentinelRef}
+            className="h-8 mt-2 flex items-center justify-center text-xs text-content-muted"
+          >
             {loadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             {!hasMore && images.length > 0 && <span>已经到底了</span>}
           </div>
         </div>
       </div>
+    </div>
+  )
+}
 
-      {/* 预览弹窗 */}
-      {preview && (
-        <div
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-          onClick={() => setPreview(null)}
-        >
-          <div
-            className="relative max-w-4xl w-full bg-surface rounded-xl border border-line/60 shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-2 border-b border-line/50">
-              <span className="text-xs text-content-muted">
-                {new Date(preview.createdAt).toLocaleString()}
-              </span>
-              <button
-                onClick={() => setPreview(null)}
-                className="p-1 rounded-md hover:bg-surface-subtle"
-                aria-label="关闭"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 flex flex-col md:flex-row gap-4 max-h-[80vh]">
-              <div className="flex-1 min-w-0 flex items-center justify-center bg-surface-muted rounded-lg overflow-hidden">
-                <Image
-                  src={preview.url}
-                  alt={preview.prompt}
-                  width={preview.width}
-                  height={preview.height}
-                  className="max-w-full max-h-[70vh] w-auto h-auto object-contain"
-                  unoptimized
-                />
-              </div>
-              <div className="md:w-64 shrink-0 flex flex-col gap-2 text-sm">
-                <div>
-                  <div className="text-xs text-content-muted mb-1">提示词</div>
-                  <div className="text-content-primary leading-relaxed">{preview.prompt}</div>
-                </div>
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  <button
-                    onClick={() => handleCopyPrompt(preview.prompt)}
-                    className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-line/60 hover:bg-surface-subtle"
-                  >
-                    <Copy className="w-3 h-3" /> 复制提示词
-                  </button>
-                  <button
-                    onClick={() => handleDownload(preview)}
-                    className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-line/60 hover:bg-surface-subtle"
-                  >
-                    <Download className="w-3 h-3" /> 下载
-                  </button>
-                  <button
-                    onClick={() => { setPreview(null); handleDelete(preview.id) }}
-                    className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10"
-                  >
-                    <Trash2 className="w-3 h-3" /> 删除
-                  </button>
-                </div>
-              </div>
-            </div>
+// ─── 参考图上传区域 ────────────────────────────────────────────────────────────
+function ReferenceImageDropZone({
+  image,
+  uploading,
+  onPick,
+}: {
+  image: { url: string; name: string; size: number } | null
+  uploading: boolean
+  onPick: (file: File) => void
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    setDragging(false)
+    if (image || uploading) return
+    const file = e.dataTransfer.files?.[0]
+    if (file) onPick(file)
+  }
+
+  if (image) {
+    return (
+      <div className="relative w-full aspect-[3/2] rounded-lg overflow-hidden border border-line/60 bg-surface-muted group">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={image.url}
+          alt={image.name}
+          className="w-full h-full object-contain"
+        />
+        <div className="absolute bottom-0 inset-x-0 px-2 py-1 bg-gradient-to-t from-black/70 to-transparent">
+          <div className="text-[11px] text-white truncate" title={image.name}>
+            {image.name}
           </div>
         </div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault()
+        setDragging(false)
+      }}
+      onDrop={handleDrop}
+      onClick={() => inputRef.current?.click()}
+      className={cn(
+        'w-full h-24 rounded-lg border border-dashed cursor-pointer',
+        'flex flex-col items-center justify-center gap-1',
+        'text-[11px] text-content-muted transition-colors',
+        dragging
+          ? 'border-accent bg-accent/5 text-accent'
+          : 'border-line/60 bg-surface-subtle hover:bg-surface-muted hover:border-line-strong'
+      )}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) onPick(f)
+          e.target.value = ''
+        }}
+      />
+      {uploading ? (
+        <>
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>上传中...</span>
+        </>
+      ) : (
+        <>
+          {dragging ? <Upload className="w-4 h-4" /> : <ImagePlus className="w-4 h-4" />}
+          <span>点击或拖拽上传图片</span>
+        </>
       )}
     </div>
   )
 }
 
-// 大图预览视图:mac 红绿灯风格标题栏,红点 = 关闭返回网格
+// ─── 共享二创面板(PreviewView 与弹窗共用) ───────────────────────────────────
+function EditPanel({
+  image,
+  onComplete,
+  onCancel,
+  layout,
+}: {
+  image: GeneratedImage
+  onComplete: (primary: GeneratedImage, all: GeneratedImage[]) => void
+  onCancel: () => void
+  /** preview = 嵌在大图预览里 | modal = 嵌在弹窗右侧抽屉 */
+  layout: 'preview' | 'modal'
+}) {
+  const [editTab, setEditTab] = useState<EditTab>('edit')
+  const [editPrompt, setEditPrompt] = useState('')
+  const [editN, setEditN] = useState(1)
+  const [maskRect, setMaskRect] = useState<MaskRect | null>(null)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
+  const [variations, setVariations] = useState<GeneratedImage[] | null>(null)
+  const imgWrapRef = useRef<HTMLDivElement | null>(null)
+  const dragStateRef = useRef<null | { startX: number; startY: number }>(null)
+
+  // 换图重置
+  useEffect(() => {
+    setEditPrompt('')
+    setMaskRect(null)
+    setEditError(null)
+    setVariations(null)
+    setEditTab('edit')
+  }, [image.id])
+
+  async function runEdit() {
+    if (editBusy) return
+    setEditBusy(true)
+    setEditError(null)
+    setVariations(null)
+    try {
+      const body: Record<string, unknown> = {
+        parentId: image.id,
+        editType: editTab,
+        prompt: editPrompt.trim(),
+        source: 'workspace',
+      }
+      if (editTab === 'variation') body.n = editN
+      if (editTab === 'inpaint' && maskRect) body.maskRect = maskRect
+
+      const res = await fetch('/api/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `二创失败 (HTTP ${res.status})`)
+      }
+      const data = (await res.json()) as { primary: GeneratedImage; items: GeneratedImage[] }
+      if (editTab === 'variation') {
+        setVariations(data.items)
+      } else {
+        onComplete(data.primary, data.items)
+      }
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : '二创失败')
+    } finally {
+      setEditBusy(false)
+    }
+  }
+
+  function pickVariation(img: GeneratedImage) {
+    if (!variations) return
+    const others = variations.filter((v) => v.id !== img.id)
+    onComplete(img, [img, ...others])
+  }
+
+  function cancelAll() {
+    setVariations(null)
+    onCancel()
+  }
+
+  // ── inpaint mask 拖拽交互 ──────────────────────────────────────────────────
+  function handleMaskDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (editTab !== 'inpaint') return
+    const wrap = imgWrapRef.current
+    if (!wrap) return
+    const rect = wrap.getBoundingClientRect()
+    const x = (e.clientX - rect.left) / rect.width
+    const y = (e.clientY - rect.top) / rect.height
+    if (x < 0 || x > 1 || y < 0 || y > 1) return
+    dragStateRef.current = { startX: x, startY: y }
+    setMaskRect({ x, y, w: 0, h: 0 })
+    ;(e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId)
+  }
+
+  function handleMaskMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragStateRef.current || editTab !== 'inpaint') return
+    const wrap = imgWrapRef.current
+    if (!wrap) return
+    const rect = wrap.getBoundingClientRect()
+    const cx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+    const cy = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height))
+    const sx = dragStateRef.current.startX
+    const sy = dragStateRef.current.startY
+    const x = Math.min(sx, cx)
+    const y = Math.min(sy, cy)
+    const w = Math.abs(cx - sx)
+    const h = Math.abs(cy - sy)
+    setMaskRect({ x, y, w, h })
+  }
+
+  function handleMaskUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!dragStateRef.current) return
+    dragStateRef.current = null
+    try {
+      ;(e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId)
+    } catch {}
+    // 若矩形太小则清空
+    setMaskRect((prev) => (prev && (prev.w < 0.02 || prev.h < 0.02) ? null : prev))
+  }
+
+  return (
+    <div className="flex flex-col min-h-0">
+      {variations && (
+        <div className="p-3 border-b border-line/60">
+          <div className="text-xs text-content-secondary mb-2">点击挑一张作为新图</div>
+          <div className="grid grid-cols-2 gap-2">
+            {variations.map((v) => (
+              <button
+                key={v.id}
+                onClick={() => pickVariation(v)}
+                className="relative aspect-square rounded-md overflow-hidden border border-line/60 hover:border-accent hover:ring-2 hover:ring-accent/40 transition group"
+              >
+                <Image
+                  src={v.url}
+                  alt={v.prompt}
+                  width={v.width}
+                  height={v.height}
+                  className="w-full h-full object-cover"
+                  unoptimized
+                />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition flex items-center justify-center">
+                  <Check className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 transition" />
+                </div>
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-end mt-2">
+            <button
+              onClick={() => setVariations(null)}
+              className="text-[11px] text-content-muted hover:text-content-primary"
+            >
+              返回
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!variations && (
+        <>
+          <div className="p-3 border-b border-line/60">
+            <div className="flex items-center gap-1.5">
+              <EditTabButton
+                active={editTab === 'edit'}
+                onClick={() => setEditTab('edit')}
+                icon={<Wand2 className="w-3 h-3" />}
+                label="以图生图"
+              />
+              <EditTabButton
+                active={editTab === 'inpaint'}
+                onClick={() => setEditTab('inpaint')}
+                icon={<Brush className="w-3 h-3" />}
+                label="局部重绘"
+              />
+              <EditTabButton
+                active={editTab === 'variation'}
+                onClick={() => setEditTab('variation')}
+                icon={<Layers className="w-3 h-3" />}
+                label="变体"
+              />
+            </div>
+            <div className="mt-2 text-[10px] text-content-muted leading-relaxed">
+              二创始终由 通义千问 · 图像编辑 (qwen-image-edit) 执行,与右上角生图模型无关。
+            </div>
+          </div>
+
+          {/* 提示词输入 / variation N 选择 */}
+          <div className="p-3 border-b border-line/60 flex flex-col gap-2">
+            {editTab !== 'variation' && (
+              <textarea
+                value={editPrompt}
+                onChange={(e) => setEditPrompt(e.target.value.slice(0, 500))}
+                placeholder={
+                  editTab === 'inpaint'
+                    ? '描述要修改的内容(只对红框区域生效):把头发颜色改成银色'
+                    : '描述要修改的内容:把背景换成雪山,保持人物不变'
+                }
+                maxLength={500}
+                className={cn(
+                  'w-full min-h-16 max-h-32 px-3 py-2 rounded-lg resize-none',
+                  'bg-surface-subtle border border-line/60 text-xs leading-relaxed',
+                  'placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-accent/40'
+                )}
+              />
+            )}
+            {editTab === 'variation' && (
+              <div className="flex items-center gap-2 text-xs text-content-secondary">
+                <span>生成数量</span>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setEditN(n)}
+                      className={cn(
+                        'px-2.5 py-1 rounded-md border text-xs transition',
+                        editN === n
+                          ? 'bg-accent/10 border-accent/40 text-accent'
+                          : 'border-line/60 hover:bg-surface'
+                      )}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-content-muted truncate">· 多张供挑</span>
+              </div>
+            )}
+            {editTab === 'inpaint' && (
+              <div className="text-[11px] text-content-muted">
+                {maskRect
+                  ? `mask: ${(maskRect.x * 100).toFixed(0)},${(maskRect.y * 100).toFixed(0)},${(maskRect.w * 100).toFixed(0)},${(maskRect.h * 100).toFixed(0)}%`
+                  : '在下方图片上拖动鼠标绘制要重绘的区域'}
+              </div>
+            )}
+          </div>
+
+          {/* inpaint 时在图片区域显示 mask 编辑器；其他模式显示提示 */}
+          {editTab === 'inpaint' && layout === 'preview' && (
+            <div className="px-3 pt-3">
+              <div
+                ref={imgWrapRef}
+                onPointerDown={handleMaskDown}
+                onPointerMove={handleMaskMove}
+                onPointerUp={handleMaskUp}
+                className="relative w-full max-w-md mx-auto aspect-square bg-surface rounded-md overflow-hidden cursor-crosshair select-none touch-none"
+              >
+                <Image
+                  src={image.url}
+                  alt={image.prompt}
+                  width={image.width}
+                  height={image.height}
+                  className="w-full h-full object-contain pointer-events-none"
+                  unoptimized
+                  draggable={false}
+                />
+                {maskRect && maskRect.w > 0 && (
+                  <div
+                    className="absolute border-2 border-red-500 bg-red-500/30 pointer-events-none"
+                    style={{
+                      left: `${maskRect.x * 100}%`,
+                      top: `${maskRect.y * 100}%`,
+                      width: `${maskRect.w * 100}%`,
+                      height: `${maskRect.h * 100}%`,
+                    }}
+                  />
+                )}
+                {!maskRect && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-white text-xs pointer-events-none">
+                    拖动鼠标绘制要重绘的区域
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {editError && (
+            <div className="mx-3 mt-3 px-3 py-2 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-600 dark:text-red-400">
+              {editError}
+            </div>
+          )}
+
+          <div className="p-3 mt-auto flex items-center justify-end gap-2 border-t border-line/60">
+            <button
+              onClick={cancelAll}
+              className="px-3 py-1.5 text-xs rounded-md border border-line/60 hover:bg-surface"
+              disabled={editBusy}
+            >
+              取消
+            </button>
+            <button
+              onClick={runEdit}
+              disabled={
+                editBusy ||
+                (editTab !== 'variation' && !editPrompt.trim()) ||
+                (editTab === 'inpaint' && !maskRect)
+              }
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md font-medium',
+                'bg-accent text-accent-foreground hover:bg-accent-hover',
+                'disabled:opacity-50 disabled:cursor-not-allowed transition-colors'
+              )}
+            >
+              {editBusy ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  生成中…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3 h-3" />
+                  生成
+                </>
+              )}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── 大图预览视图（集成二创） ──────────────────────────────────────────────────
 function PreviewView({
   image,
+  allImages,
   onClose,
   onDelete,
   onCopyPrompt,
-  onPreview,
+  onEditComplete,
+  onNavigate,
+  onDownload,
 }: {
   image: GeneratedImage
+  allImages: GeneratedImage[]
   onClose: () => void
   onDelete: () => void
   onCopyPrompt: () => void
-  onPreview: () => void
+  onEditComplete: (primary: GeneratedImage, all: GeneratedImage[]) => void
+  onNavigate: (img: GeneratedImage) => void
+  onDownload: (img: GeneratedImage) => void
 }) {
+  const [editing, setEditing] = useState(false)
+
+  const breadcrumb = (() => {
+    const chain: GeneratedImage[] = []
+    const visited = new Set<string>()
+    let cur: GeneratedImage | undefined = image
+    while (cur && !visited.has(cur.id)) {
+      visited.add(cur.id)
+      chain.push(cur)
+      if (!cur.parentId) break
+      cur = allImages.find((i) => i.id === cur!.parentId)
+    }
+    return chain.reverse()
+  })()
+
   return (
     <div className="rounded-xl overflow-hidden border border-line/60 bg-surface shadow-sm">
-      {/* 模拟 mac 标题栏:红/黄/绿三圆点 */}
+      {/* 模拟 mac 标题栏 */}
       <div className="flex items-center px-3 py-2 bg-surface-subtle border-b border-line/60">
         <div className="flex items-center gap-1.5">
           <button
@@ -566,21 +1106,84 @@ function PreviewView({
             title="返回画廊"
             aria-label="关闭预览,返回画廊视图"
           >
-            <X className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100 transition" strokeWidth={3} />
+            <X
+              className="w-2 h-2 text-black/60 opacity-0 group-hover:opacity-100 transition"
+              strokeWidth={3}
+            />
           </button>
           <span className="w-3 h-3 rounded-full bg-[#febc2e]" />
           <span className="w-3 h-3 rounded-full bg-[#28c840]" />
         </div>
-        <div className="flex-1 mx-4 text-xs text-content-muted truncate text-center">
-          {image.prompt}
+
+        {/* 面包屑 */}
+        <div className="flex-1 mx-4 text-xs text-content-muted truncate flex items-center justify-center gap-1 min-w-0">
+          {breadcrumb.length <= 1 ? (
+            <span className="truncate">{image.prompt}</span>
+          ) : (
+            <>
+              {breadcrumb.map((b, idx) => (
+                <span key={b.id} className="flex items-center gap-1 min-w-0">
+                  <button
+                    onClick={() => onNavigate(b)}
+                    className={cn(
+                      'truncate max-w-[140px] hover:text-content-primary transition-colors',
+                      idx === breadcrumb.length - 1
+                        ? 'text-content-primary font-medium'
+                        : 'hover:underline'
+                    )}
+                    title={b.prompt}
+                  >
+                    {idx === 0
+                      ? '原图'
+                      : idx === breadcrumb.length - 1
+                        ? '当前'
+                        : `v${idx + 1}`}
+                  </button>
+                  {idx < breadcrumb.length - 1 && (
+                    <ChevronRight className="w-3 h-3 shrink-0 opacity-60" />
+                  )}
+                </span>
+              ))}
+            </>
+          )}
         </div>
+
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setEditing((e) => !e)}
+            className={cn(
+              'p-1.5 rounded-md transition flex items-center gap-1 text-xs',
+              editing
+                ? 'bg-accent text-accent-foreground'
+                : 'hover:bg-surface text-content-muted hover:text-content-primary'
+            )}
+            title="二次创作"
+            aria-pressed={editing}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            <span>二创</span>
+          </button>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-md hover:bg-surface text-content-muted hover:text-content-primary text-xs flex items-center gap-1"
+            title="返回画廊"
+          >
+            <Grid3x3 className="w-3.5 h-3.5" />
+            <span>画廊</span>
+          </button>
           <button
             onClick={onCopyPrompt}
             className="p-1.5 rounded-md hover:bg-surface text-content-muted hover:text-content-primary"
             title="复制提示词"
           >
             <Copy className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => onDownload(image)}
+            className="p-1.5 rounded-md hover:bg-surface text-content-muted hover:text-content-primary"
+            title="下载"
+          >
+            <Download className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onDelete}
@@ -592,21 +1195,117 @@ function PreviewView({
         </div>
       </div>
 
-      {/* 图片主体 */}
-      <div
-        className="bg-surface-muted flex items-center justify-center cursor-zoom-in min-h-[50vh] max-h-[70vh] p-4"
-        onClick={onPreview}
-      >
-        <Image
-          src={image.url}
-          alt={image.prompt}
-          width={image.width}
-          height={image.height}
-          className="max-w-full max-h-[68vh] w-auto h-auto object-contain"
-          unoptimized
-        />
+      <div className="flex min-h-0 max-h-[70vh]">
+        {/* 大图区 */}
+        <div className="flex-1 min-w-0 bg-surface-muted flex items-center justify-center p-4 relative">
+          <div className="w-full h-full flex items-center justify-center">
+            <Image
+              src={image.url}
+              alt={image.prompt}
+              width={image.width}
+              height={image.height}
+              className={cn(
+                'max-w-full max-h-[68vh] w-auto h-auto object-contain',
+                editing && 'pointer-events-none'
+              )}
+              unoptimized
+              draggable={false}
+            />
+          </div>
+        </div>
+
+        {/* 二创右侧面板 */}
+        {editing && (
+          <div className="w-72 shrink-0 border-l border-line/60 bg-surface min-h-0">
+            <EditPanel
+              image={image}
+              onComplete={(primary, all) => {
+                onEditComplete(primary, all)
+                setEditing(false)
+              }}
+              onCancel={() => setEditing(false)}
+              layout="preview"
+            />
+          </div>
+        )}
       </div>
+
+      {/* 提示词/元信息 */}
+      <div className="border-t border-line/60 px-3 py-2 text-xs text-content-secondary flex items-center justify-between gap-2">
+        <div className="truncate min-w-0">
+          <span className="text-content-muted">提示词：</span>
+          {image.prompt}
+        </div>
+        <div className="shrink-0 flex items-center gap-2 text-[11px] text-content-muted">
+          {image.referenceImageUrl && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+              参考图
+            </span>
+          )}
+          {image.editType && image.editType !== 't2i' && (
+            <span className="px-1.5 py-0.5 rounded bg-accent/10 text-accent">
+              {image.editType === 'edit'
+                ? '二创'
+                : image.editType === 'inpaint'
+                  ? '局部重绘'
+                  : '变体'}
+            </span>
+          )}
+          <span>{new Date(image.createdAt).toLocaleString()}</span>
+        </div>
+      </div>
+
+      {/* 参考图原图预览(若有) */}
+      {image.referenceImageUrl && (
+        <div className="border-t border-line/60 px-3 py-2.5 bg-surface-subtle/40">
+          <div className="text-[11px] text-content-muted mb-1.5 flex items-center gap-1">
+            <span className="font-medium">原参考图：</span>
+            <span>模型基于这张图生成了上方结果</span>
+          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <a
+            href={image.referenceImageUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="block w-32 h-32 rounded-md overflow-hidden border border-line/60 hover:border-accent transition-colors"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={image.referenceImageUrl}
+              alt="参考图"
+              className="w-full h-full object-cover"
+            />
+          </a>
+        </div>
+      )}
     </div>
+  )
+}
+
+function EditTabButton({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  label: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-1 px-2.5 py-1 rounded-md text-xs transition border',
+        active
+          ? 'bg-accent text-accent-foreground border-accent'
+          : 'border-line/60 hover:bg-surface text-content-secondary'
+      )}
+    >
+      {icon}
+      {label}
+    </button>
   )
 }
 
@@ -621,10 +1320,44 @@ function ImageCard({
   onDelete: () => void
   onCopyPrompt: () => void
 }) {
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const ctxRef = useRef<HTMLDivElement | null>(null)
+
+  function handleContextMenu(e: React.MouseEvent) {
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  useEffect(() => {
+    if (!ctxMenu) return
+    function onDown(e: MouseEvent) {
+      if (ctxRef.current && !ctxRef.current.contains(e.target as Node)) {
+        setCtxMenu(null)
+      }
+    }
+    function onScroll() {
+      setCtxMenu(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('scroll', onScroll, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('scroll', onScroll, true)
+    }
+  }, [ctxMenu])
+
+  function run(action: 'preview' | 'copy' | 'delete') {
+    setCtxMenu(null)
+    if (action === 'preview') onPreview()
+    else if (action === 'copy') onCopyPrompt()
+    else onDelete()
+  }
+
   return (
     <div
       className="group relative aspect-square rounded-lg overflow-hidden bg-surface-muted border border-line/60 cursor-pointer"
       onClick={onPreview}
+      onContextMenu={handleContextMenu}
     >
       <Image
         src={image.url}
@@ -634,7 +1367,20 @@ function ImageCard({
         className="w-full h-full object-cover"
         unoptimized
       />
-      {/* 悬浮操作 */}
+      {image.referenceImageUrl && (
+        <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/85 text-white shadow">
+          参考图
+        </span>
+      )}
+      {image.editType && image.editType !== 't2i' && !image.referenceImageUrl && (
+        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] bg-accent/85 text-white shadow">
+          {image.editType === 'edit'
+            ? '二创'
+            : image.editType === 'inpaint'
+              ? '局部重绘'
+              : '变体'}
+        </span>
+      )}
       <div
         className={cn(
           'absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent',
@@ -644,14 +1390,20 @@ function ImageCard({
         <div className="text-[11px] text-white line-clamp-2 mb-1.5">{image.prompt}</div>
         <div className="flex items-center gap-1">
           <button
-            onClick={(e) => { e.stopPropagation(); onCopyPrompt() }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onCopyPrompt()
+            }}
             className="p-1 rounded bg-white/15 hover:bg-white/25 text-white"
             title="复制提示词"
           >
             <Copy className="w-3 h-3" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); onDelete() }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete()
+            }}
             className="p-1 rounded bg-white/15 hover:bg-red-500/40 text-white ml-auto"
             title="删除"
           >
@@ -659,6 +1411,35 @@ function ImageCard({
           </button>
         </div>
       </div>
+
+      {ctxMenu && (
+        <div
+          ref={ctxRef}
+          className="fixed z-50 min-w-[140px] bg-surface border border-line/60 rounded-lg shadow-xl py-1 text-xs"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => run('preview')}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-subtle text-left"
+          >
+            <Sparkles className="w-3 h-3" /> 查看 / 二创
+          </button>
+          <button
+            onClick={() => run('copy')}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-subtle text-left"
+          >
+            <Copy className="w-3 h-3" /> 复制提示词
+          </button>
+          <div className="my-1 border-t border-line/40" />
+          <button
+            onClick={() => run('delete')}
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-500/10 text-red-600 dark:text-red-400 text-left"
+          >
+            <Trash2 className="w-3 h-3" /> 删除
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,0 +1,57 @@
+﻿
+> aichatt@0.1.0 dev
+> next dev
+
+node.exe :  鈿?Port 3000 is in use, trying 3001 instead.
+所在位置 行:1 字符: 1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ( 鈿?Port 3000 is...g 3001 instead.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  鈻?Next.js 14.2.35
+  - Local:        http://localhost:3001
+  - Environments: .env.local, .env
+
+ 鉁?Starting...
+ 鉁?Ready in 3.9s
+ 鈼?Compiling /src/middleware ...
+ 鉁?Compiled /src/middleware in 942ms (135 modules)
+ 鈼?Compiling /login ...
+ 鉁?Compiled /login in 11.3s (691 modules)
+ GET /login 200 in 897ms
+ GET /login 200 in 63ms
+ 鉁?Compiled in 805ms (290 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename 'D:
+\xiaz\椤圭洰琛╘chatchat\aichatt\aichatt\.next\cache\webpack\client-development\0.pack.gz_' -> 'D:\xiaz\椤圭洰琛╘chatchat\aichat
+t\aichatt\.next\cache\webpack\client-development\0.pack.gz'
+ 鉁?Compiled in 4.8s (290 modules)
+ 鉁?Compiled in 347ms (290 modules)
+ 鉁?Compiled in 262ms (290 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename 'D:
+\xiaz\椤圭洰琛╘chatchat\aichatt\aichatt\.next\cache\webpack\client-development\0.pack.gz_' -> 'D:\xiaz\椤圭洰琛╘chatchat\aichat
+t\aichatt\.next\cache\webpack\client-development\0.pack.gz'
+ 鉁?Compiled in 4.8s (290 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename 'D:
+\xiaz\椤圭洰琛╘chatchat\aichatt\aichatt\.next\cache\webpack\client-development\0.pack.gz_' -> 'D:\xiaz\椤圭洰琛╘chatchat\aichat
+t\aichatt\.next\cache\webpack\client-development\0.pack.gz'
+ 鉁?Compiled in 262ms (290 modules)
+ 鉁?Compiled in 263ms (290 modules)
+ 鉁?Compiled in 254ms (290 modules)
+ 鉁?Compiled in 291ms (290 modules)
+ 鉁?Compiled in 250ms (290 modules)
+ 鉁?Compiled in 272ms (290 modules)
+ 鉁?Compiled in 237ms (290 modules)
+ 鉁?Compiled in 240ms (290 modules)
+ 鉁?Compiled in 243ms (290 modules)
+ 鉁?Compiled in 252ms (290 modules)
+ 鉁?Compiled in 592ms (290 modules)
+ 鉁?Compiled in 744ms (290 modules)
+ 鉁?Compiled in 377ms (290 modules)
+ 鉁?Compiled in 265ms (290 modules)
+ 鉁?Compiled in 281ms (290 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: ENOENT: no such file or directory, rename 'D:
+\xiaz\椤圭洰琛╘chatchat\aichatt\aichatt\.next\cache\webpack\client-development\0.pack.gz_' -> 'D:\xiaz\椤圭洰琛╘chatchat\aichat
+t\aichatt\.next\cache\webpack\client-development\0.pack.gz'
+ 鉁?Compiled in 1250ms (290 modules)
+ 鉁?Compiled in 572ms (290 modules)
