@@ -1,16 +1,11 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect, KeyboardEvent, ChangeEvent } from 'react'
-import { Send, Square, X, Plus, AlertCircle, Globe, ChevronDown } from 'lucide-react'
+import { Send, Square, X, Plus, AlertCircle, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FileUpload, deleteUploadedFile, type Attachment } from './FileUpload'
 import { ModelSelector } from './ModelSelector'
 import type { ModelDefinition } from '@/lib/ai/types'
-
-const SEARCH_ENGINE_LABELS: Record<string, string> = {
-  qianfan: '千帆',
-  tavily: 'Tavily',
-}
 
 export interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => void
@@ -26,11 +21,6 @@ export interface ChatInputProps {
   webSearch?: boolean
   onWebSearchChange?: (enabled: boolean) => void
   webSearchAvailable?: boolean
-  /** 当前联网搜索引擎 */
-  searchEngine?: string
-  /** 可用的联网搜索引擎列表 */
-  availableSearchEngines?: string[]
-  onSearchEngineChange?: (engine: string) => void
   // 对比模式
   compareMode?: boolean
   compareModeAvailable?: boolean
@@ -52,9 +42,6 @@ export function ChatInput({
   webSearch = false,
   onWebSearchChange,
   webSearchAvailable = false,
-  searchEngine,
-  availableSearchEngines = [],
-  onSearchEngineChange,
   compareMode = false,
   compareModeAvailable = false,
   onCompareModeChange,
@@ -65,9 +52,6 @@ export function ChatInput({
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [sendError, setSendError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // 联网搜索引擎下拉展开状态
-  const [searchEngineDropdownOpen, setSearchEngineDropdownOpen] = useState(false)
-  const searchEngineDropdownRef = useRef<HTMLDivElement>(null)
 
   // Auto-resize textarea
   const adjustHeight = useCallback(() => {
@@ -80,18 +64,6 @@ export function ChatInput({
   useEffect(() => {
     adjustHeight()
   }, [input, adjustHeight])
-
-  // 点击外部关闭联网引擎下拉
-  useEffect(() => {
-    if (!searchEngineDropdownOpen) return
-    const handler = (e: MouseEvent) => {
-      if (searchEngineDropdownRef.current && !searchEngineDropdownRef.current.contains(e.target as Node)) {
-        setSearchEngineDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [searchEngineDropdownOpen])
 
   // Reset height when loading finishes
   useEffect(() => {
@@ -332,76 +304,27 @@ export function ChatInput({
                 深度思考
               </button>
               {onWebSearchChange && (
-                <div className="relative" ref={searchEngineDropdownRef}>
-                  {availableSearchEngines.length > 1 ? (
-                    // 多引擎：下拉选择
-                    <button
-                      onClick={() => setSearchEngineDropdownOpen((v) => !v)}
-                      disabled={isLoading || !webSearchAvailable}
-                      className={cn(
-                        'inline-flex items-center gap-1 h-7 px-2 rounded-full text-[11px] font-medium transition-colors',
-                        webSearch
-                          ? 'bg-accent text-accent-foreground'
-                          : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
-                        (isLoading || !webSearchAvailable) && 'opacity-50 cursor-not-allowed'
-                      )}
-                      title={webSearchAvailable ? '智能搜索' : '请先在【设置 → 联网搜索】中配置搜索 API Key'}
-                      aria-label="智能搜索"
-                      aria-expanded={searchEngineDropdownOpen}
-                    >
-                      <Globe className="w-3 h-3" />
-                      {SEARCH_ENGINE_LABELS[searchEngine ?? 'qianfan'] ?? searchEngine ?? '千帆'}
-                      <ChevronDown className="w-2.5 h-2.5" />
-                    </button>
-                  ) : (
-                    // 单引擎：普通按钮
-                    <button
-                      onClick={() => onWebSearchChange(!webSearch)}
-                      disabled={isLoading || !webSearchAvailable}
-                      className={cn(
-                        'inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors',
-                        webSearch
-                          ? 'bg-accent text-accent-foreground'
-                          : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
-                        (isLoading || !webSearchAvailable) && 'opacity-50 cursor-not-allowed'
-                      )}
-                      title={webSearchAvailable ? '智能搜索' : '请先在【设置 → 联网搜索】中配置搜索 API Key'}
-                      aria-label="智能搜索"
-                      aria-pressed={webSearch}
-                    >
-                      <Globe className="w-3 h-3" />
-                      智能搜索
-                    </button>
+                <button
+                  onClick={() => onWebSearchChange(!webSearch)}
+                  disabled={isLoading || !webSearchAvailable}
+                  className={cn(
+                    'inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-medium transition-colors',
+                    webSearch
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-surface-muted hover:bg-surface-subtle text-content-secondary',
+                    (isLoading || !webSearchAvailable) && 'opacity-50 cursor-not-allowed'
                   )}
-
-                  {/* 引擎下拉菜单 */}
-                  {searchEngineDropdownOpen && (
-                    <div className="absolute bottom-full mb-1.5 right-0 z-50 min-w-[120px] rounded-lg border border-line bg-surface shadow-xl py-1">
-                      {availableSearchEngines.map((e) => (
-                        <button
-                          key={e}
-                          onClick={() => {
-                            onSearchEngineChange?.(e)
-                            setSearchEngineDropdownOpen(false)
-                          }}
-                          className={cn(
-                            'w-full text-left px-3 py-1.5 text-[11px] font-medium transition-colors',
-                            (searchEngine ?? 'qianfan') === e
-                              ? 'text-accent bg-accent/10'
-                              : 'text-content-secondary hover:bg-surface-subtle hover:text-content-primary'
-                          )}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>{SEARCH_ENGINE_LABELS[e] ?? e}</span>
-                            {(searchEngine ?? 'qianfan') === e && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
-                            )}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                  title={
+                    webSearchAvailable
+                      ? '智能搜索：开启后 AI 会主动调用联网搜索获取实时信息'
+                      : '请先在【设置 → 联网搜索】中配置搜索 API Key'
+                  }
+                  aria-label="智能搜索"
+                  aria-pressed={webSearch}
+                >
+                  <Globe className="w-3 h-3" />
+                  智能搜索
+                </button>
               )}
               {compareModeAvailable && onCompareModeChange && (
                 <button

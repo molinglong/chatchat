@@ -398,30 +398,30 @@ export async function POST(req: NextRequest) {
 
   // 联网搜索能力(仅在用户配置了联网搜索 Key 且本次请求主动开启了 webSearch 时才挂上工具)
   // - webSearchEnabled: 客户端本次是否主动开启(默认 false,避免模型无脑触发搜索消耗额度)
-  // - searchApiKey: 用户配置的存在性(key 缺失就视为不可用)
+  // - 引擎: 客户端通过 searchEngine 指定(qianfan | tavily)，由 Settings 滑块控制
   const webSearchEnabled = webSearch === true
-  // 支持多引擎: 客户端指定 engine 或默认 qianfan(向后兼容)
-  const activeEngine: SearchEngineId = searchEngine ?? "qianfan"
+  const engine: SearchEngineId = searchEngine ?? "qianfan"
   let searchApiKey: string | null = null
   let searchTool: ReturnType<typeof createWebSearchTool> | null = null
   if (webSearchEnabled) {
     try {
       const searchKeyRecord = await prisma.searchApiKey.findUnique({
-        where: { userId_engine: { userId, engine: activeEngine } },
+        where: { userId_engine: { userId, engine } },
       })
       if (searchKeyRecord) {
         searchApiKey = decrypt(searchKeyRecord.encryptedKey)
-        searchTool = createWebSearchTool(activeEngine, searchApiKey)
+        searchTool = createWebSearchTool(engine, searchApiKey)
+        console.log(`[chat] Using search engine: ${engine}`)
       }
     } catch (err) {
-      console.error(`[chat] Failed to load search key for engine ${activeEngine}:`, err)
+      console.error(`[chat] Failed to load search key for engine ${engine}:`, err)
     }
     if (!searchApiKey) {
-      console.warn(`[chat] User ${userId} requested webSearch but no SearchApiKey configured for engine '${activeEngine}'`)
+      console.warn(`[chat] User ${userId} requested webSearch but no SearchApiKey configured for engine '${engine}'`)
     }
   }
   if (searchTool) {
-    const engineDisplayName = activeEngine === "tavily" ? "Tavily" : "百度千帆"
+    const engineDisplayName = engine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
       '## 联网搜索能力',
       `你拥有 web_search 工具(基于 ${engineDisplayName} 搜索 API)。当用户问题涉及以下场景时,**主动调用 web_search** 一次或多次获取实时信息再作答:`,
@@ -432,7 +432,7 @@ export async function POST(req: NextRequest) {
       '普通闲聊、通用知识问答、代码/翻译/数学等不需要联网。回答时请自然引用来源，不要编造链接。',
     ].join('\n'))
   }
-  console.log(`[chat] webSearchEnabled=${webSearchEnabled}, engine=${activeEngine}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
+  console.log(`[chat] webSearchEnabled=${webSearchEnabled}, engine=${engine}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
 
   // Always enable reasoning extraction for models that support it or deepThink is enabled
   const shouldExtractReasoning = deepThink || modelDef.supportsReasoning

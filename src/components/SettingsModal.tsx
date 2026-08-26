@@ -218,6 +218,9 @@ export function SettingsModal() {
   const [editingImageModelId, setEditingImageModelId] = useState<string | null>(null)
   const [cmFormOpen, setCmFormOpen] = useState(false)
 
+  // 联网搜索：当前选中引擎（来自共享 store，滑块和 ChatPanel 共用）
+  const searchEngine = useChatStore((s) => s.searchEngine)
+
   // 联网搜索设置状态
   const [searchQuery, setSearchQuery] = useState('')
   const [searchTesting, setSearchTesting] = useState(false)
@@ -235,17 +238,11 @@ export function SettingsModal() {
   const [searchKeyDeleting, setSearchKeyDeleting] = useState<string | null>(null)
   const [searchKeyShowPassword, setSearchKeyShowPassword] = useState<Record<string, boolean>>({})
 
-  // 联网搜索多引擎: 支持的引擎列表 + 当前测试选中引擎 + 启用的引擎
+  // 联网搜索多引擎: 支持的引擎列表
   const SEARCH_ENGINE_LIST = [
     { id: 'qianfan' as const, name: '百度千帆', desc: '中文搜索强，需单独申请', docsUrl: 'https://cloud.baidu.com/doc/QIANFAN/s/3l6bavkfm' },
     { id: 'tavily' as const, name: 'Tavily', desc: '英文及多语言，免费额度可用', docsUrl: 'https://docs.tavily.com/documentation/api-reference/endpoint/search' },
   ]
-  const [activeSearchEngine, setActiveSearchEngine] = useState<'qianfan' | 'tavily'>('qianfan')
-  // 各引擎开关(默认全开)
-  const [enabledSearchEngines, setEnabledSearchEngines] = useState<Record<string, boolean>>({
-    qianfan: true,
-    tavily: true,
-  })
 
   // 加载联网搜索 Key 列表
   useEffect(() => {
@@ -544,7 +541,7 @@ export function SettingsModal() {
       setMessage({ type: 'error', text: '请输入搜索关键词' })
       return
     }
-    const currentEngine = activeSearchEngine
+    const currentEngine = searchEngine
     const currentKey = searchKeys.find((k) => k.engine === currentEngine)
     if (!currentKey) {
       setMessage({ type: 'error', text: `请先配置 ${SEARCH_ENGINE_LIST.find((e) => e.id === currentEngine)?.name} 的 API Key` })
@@ -1243,111 +1240,152 @@ export function SettingsModal() {
               <>
                 {/* 联网搜索 */}
                 {activeSection === 'search' && (() => {
+                  // 当前选中引擎
+                  const engineDef = SEARCH_ENGINE_LIST.find((e) => e.id === searchEngine) ?? SEARCH_ENGINE_LIST[0]
+                  const key = searchKeys.find((k) => k.engine === searchEngine)
+                  const draft = searchDraftKeys[searchEngine] ?? ''
+                  const saving = searchKeySaving[searchEngine] ?? false
+                  const deleting = searchKeyDeleting === searchEngine
+                  const passwordVisible = searchKeyShowPassword[searchEngine] ?? false
                   return (
                     <div className="space-y-3">
 
-                      {/* 多引擎 Key 配置卡片 */}
-                      {SEARCH_ENGINE_LIST.map((engineDef) => {
-                        const key = searchKeys.find((k) => k.engine === engineDef.id)
-                        const draft = searchDraftKeys[engineDef.id] ?? ''
-                        const saving = searchKeySaving[engineDef.id] ?? false
-                        const deleting = searchKeyDeleting === engineDef.id
-                        const passwordVisible = searchKeyShowPassword[engineDef.id] ?? false
-                        const enabled = enabledSearchEngines[engineDef.id] ?? false
-                        return (
-                          <div key={engineDef.id} className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
-                            {/* 引擎标题栏 */}
-                            <div className="flex items-center gap-2 mb-0.5">
-                              <Globe className="w-4 h-4 text-content-secondary shrink-0" />
-                              <p className="text-xs font-semibold text-content-primary">{engineDef.name}</p>
-                              {key && (
-                                <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
-                                  已配置
-                                </span>
-                              )}
-                              {/* 引擎开关 */}
-                              <button
-                                role="switch"
-                                aria-checked={enabled}
-                                onClick={() => setEnabledSearchEngines((prev) => ({ ...prev, [engineDef.id]: !prev[engineDef.id] }))}
-                                className={cn(
-                                  'ml-auto relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong/50',
-                                  enabled ? 'bg-accent' : 'bg-line-strong/40'
-                                )}
-                              >
-                                <span className={cn(
-                                  'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform',
-                                  enabled ? 'translate-x-[18px]' : 'translate-x-[2px]'
-                                )} />
-                              </button>
-                            </div>
-
-                            <p className="text-[11px] text-content-secondary leading-relaxed">
-                              {engineDef.desc}
-                              <a
-                                href={engineDef.docsUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="ml-1 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5"
-                              >
-                                申请地址 <ExternalLink className="w-2.5 h-2.5" />
-                              </a>
-                            </p>
-
-                            {/* 已配置的 Key 显示 */}
-                            {key && (
-                              <div className="flex items-center gap-2">
-                                <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-surface-muted/80 border border-line/40">
-                                  <Key className="w-3.5 h-3.5 text-content-muted shrink-0" />
-                                  <code className="text-xs text-content-secondary truncate">{key.maskedKey}</code>
-                                </div>
-                                <button
-                                  onClick={() => handleDeleteSearchKey(engineDef.id)}
-                                  disabled={deleting}
-                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
-                                >
-                                  {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                                  删除
-                                </button>
-                              </div>
-                            )}
-
-                            {/* 输入框 */}
-                            <div className="flex gap-2">
-                              <div className="relative flex-1">
-                                <input
-                                  type={passwordVisible ? 'text' : 'password'}
-                                  value={draft}
-                                  onChange={(e) => setSearchDraftKeys((d) => ({ ...d, [engineDef.id]: e.target.value }))}
-                                  placeholder={key ? '输入新 Key 替换...' : '粘贴 API Key...'}
-                                  className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 pr-8 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setSearchKeyShowPassword((s) => ({ ...s, [engineDef.id]: !s[engineDef.id] }))}
-                                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-content-muted hover:text-content-primary transition-colors"
-                                  tabIndex={-1}
-                                >
-                                  {passwordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                                </button>
-                              </div>
-                              <button
-                                onClick={() => handleSaveSearchKey(engineDef.id)}
-                                disabled={!draft.trim() || saving}
-                                className={cn(
-                                  'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
-                                  draft.trim() && !saving
-                                    ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
-                                    : 'bg-surface-muted text-content-muted cursor-not-allowed'
-                                )}
-                              >
-                                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                                保存
-                              </button>
-                            </div>
+                      {/* 引擎滑块选择器 */}
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5">
+                            <Globe className="w-4 h-4 text-content-secondary" />
+                            <p className="text-xs font-medium text-content-secondary">选择引擎</p>
                           </div>
-                        )
-                      })}
+                          <p className="text-xs font-semibold text-accent">
+                            {engineDef.name}
+                          </p>
+                        </div>
+
+                        {/* 滑块轨道 */}
+                        <div className="relative">
+                          {/* 左/右标签 */}
+                          <div className="flex justify-between items-center mb-1.5 px-0.5">
+                            <span className={cn(
+                              'text-[10px] font-medium transition-colors',
+                              searchEngine === 'qianfan' ? 'text-accent' : 'text-content-muted'
+                            )}>百度千帆</span>
+                            <span className={cn(
+                              'text-[10px] font-medium transition-colors',
+                              searchEngine === 'tavily' ? 'text-accent' : 'text-content-muted'
+                            )}>Tavily</span>
+                          </div>
+
+                          {/* 轨道背景 */}
+                          <div className="relative h-7 rounded-full bg-surface-muted border border-line/60">
+                            {/* 选中高亮滑块 */}
+                            <div
+                              className={cn(
+                                'absolute top-0.5 bottom-0.5 w-1/2 rounded-full bg-accent/20 border border-accent/40 transition-all duration-200',
+                                searchEngine === 'tavily' && 'left-1/2'
+                              )}
+                            />
+                            {/* 滑块thumb */}
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={1}
+                              value={searchEngine === 'tavily' ? 1 : 0}
+                              onChange={(e) => {
+                                const next = e.target.value === '1' ? 'tavily' : 'qianfan'
+                                useChatStore.getState().setSearchEngine(next)
+                                setSearchTestResult(null)
+                              }}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                              aria-label="选择联网搜索引擎"
+                            />
+                            {/* 滑块圆点（浮在轨道上） */}
+                            <div
+                              className={cn(
+                                'absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-accent shadow-sm transition-all duration-200',
+                                searchEngine === 'tavily' ? 'left-[calc(50%+4px)]' : 'left-1'
+                              )}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 当前引擎 Key 配置卡片 */}
+                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <p className="text-xs font-semibold text-content-primary">{engineDef.name}</p>
+                          {key && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
+                              已配置
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="text-[11px] text-content-secondary leading-relaxed">
+                          {engineDef.desc}
+                          <a
+                            href={engineDef.docsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="ml-1 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5"
+                          >
+                            申请地址 <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        </p>
+
+                        {/* 已配置的 Key 显示 */}
+                        {key && (
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-surface-muted/80 border border-line/40">
+                              <Key className="w-3.5 h-3.5 text-content-muted shrink-0" />
+                              <code className="text-xs text-content-secondary truncate">{key.maskedKey}</code>
+                            </div>
+                            <button
+                              onClick={() => handleDeleteSearchKey(searchEngine)}
+                              disabled={deleting}
+                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                            >
+                              {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                              删除
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 输入框 */}
+                        <div className="flex gap-2">
+                          <div className="relative flex-1">
+                            <input
+                              type={passwordVisible ? 'text' : 'password'}
+                              value={draft}
+                              onChange={(e) => setSearchDraftKeys((d) => ({ ...d, [searchEngine]: e.target.value }))}
+                              placeholder={key ? '输入新 Key 替换...' : '粘贴 API Key...'}
+                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 pr-8 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setSearchKeyShowPassword((s) => ({ ...s, [searchEngine]: !s[searchEngine] }))}
+                              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-content-muted hover:text-content-primary transition-colors"
+                              tabIndex={-1}
+                            >
+                              {passwordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                          <button
+                            onClick={() => handleSaveSearchKey(searchEngine)}
+                            disabled={!draft.trim() || saving}
+                            className={cn(
+                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                              draft.trim() && !saving
+                                ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
+                                : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                            )}
+                          >
+                            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                            保存
+                          </button>
+                        </div>
+                      </div>
 
                       {/* 工作原理 */}
                       <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
@@ -1359,36 +1397,18 @@ export function SettingsModal() {
                           <li>· 配置 Key 后，AI 模型拥有 web_search 工具调用能力</li>
                           <li>· 当 AI 判断需要实时信息时（新闻、数据、最新事件），自动搜索</li>
                           <li>· 支持追问、多轮搜索，结果自动注入对话上下文</li>
-                          <li>· 可同时配置多个引擎，AI 会根据实际情况路由</li>
+                          <li>· 切换引擎后，智能搜索自动使用新引擎</li>
                         </ul>
                       </div>
 
-                      {/* 测试搜索：引擎选择 + 测试输入 */}
+                      {/* 测试搜索 */}
                       <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
                           <Search className="w-3.5 h-3.5 text-content-secondary" />
                           <p className="text-xs font-medium text-content-secondary">测试搜索</p>
-                          {/* 引擎切换 Tab */}
-                          <div className="ml-auto flex items-center gap-1 bg-surface-muted/80 rounded-lg p-0.5">
-                            {SEARCH_ENGINE_LIST.map((e) => {
-                              const hasKey = !!searchKeys.find((k) => k.engine === e.id)
-                              return (
-                                <button
-                                  key={e.id}
-                                  onClick={() => { setActiveSearchEngine(e.id); setSearchTestResult(null) }}
-                                  className={cn(
-                                    'px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
-                                    activeSearchEngine === e.id
-                                      ? 'bg-surface text-content-primary shadow-sm'
-                                      : 'text-content-muted hover:text-content-secondary',
-                                    !hasKey && 'opacity-40'
-                                  )}
-                                >
-                                  {e.name}
-                                </button>
-                              )
-                            })}
-                          </div>
+                          <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent font-medium">
+                            {engineDef.name}
+                          </span>
                         </div>
 
                         <div className="flex gap-2">
@@ -1398,12 +1418,12 @@ export function SettingsModal() {
                             onChange={(e) => setSearchQuery(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') handleTestSearch() }}
                             placeholder="输入关键词，如：今天上海天气"
-                            disabled={searchTesting || !searchKeys.find((k) => k.engine === activeSearchEngine)}
+                            disabled={searchTesting || !key}
                             className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 disabled:opacity-50"
                           />
                           <button
                             onClick={handleTestSearch}
-                            disabled={searchTesting || !searchQuery.trim()}
+                            disabled={searchTesting || !searchQuery.trim() || !key}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-accent text-white hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             {searchTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}

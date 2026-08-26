@@ -20,6 +20,14 @@ interface ChatState {
   /** 当前对话的风格偏移量 (0-100) */
   conversationStyleOffset: number
   setConversationStyleOffset: (offset: number) => void
+  /** 当前联网搜索引擎：qianfan | tavily，默认 qianfan */
+  searchEngine: 'qianfan' | 'tavily'
+  setSearchEngine: (engine: 'qianfan' | 'tavily') => void
+}
+
+const getInitialSearchEngine = (): 'qianfan' | 'tavily' => {
+  if (typeof window === 'undefined') return 'qianfan'
+  return localStorage.getItem('chat:searchEngine') === 'tavily' ? 'tavily' : 'qianfan'
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -41,4 +49,9 @@ export const useChatStore = create<ChatState>((set) => ({
     set((state) => ({ conversationVersion: state.conversationVersion + 1 })),
   conversationStyleOffset: 50,
   setConversationStyleOffset: (offset) => set({ conversationStyleOffset: offset }),
+  searchEngine: typeof window !== 'undefined' ? getInitialSearchEngine() : 'qianfan',
+  setSearchEngine: (engine) => {
+    localStorage.setItem('chat:searchEngine', engine)
+    set({ searchEngine: engine })
+  },
 }))

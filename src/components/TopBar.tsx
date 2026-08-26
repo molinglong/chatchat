@@ -1,6 +1,6 @@
 'use client'
 
-import { Menu, Settings as SettingsIcon, Plus, Sparkles } from 'lucide-react'
+import { Menu, Settings as SettingsIcon, Plus, Sparkles, Scale } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useChatStore } from '@/store/chat-store'
 import { useEffect, useState } from 'react'
@@ -20,7 +20,8 @@ export function TopBar() {
 
   // 在 /images 页面显示固定的页面标题
   const isImagesPage = pathname?.startsWith('/images')
-  const displayTitle = isImagesPage ? '生图工作台' : (title || '新对话')
+  const isExplorePage = pathname?.startsWith('/explore')
+  const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : (title || '新对话')
 
   function handleNewChat() {
     // Same-route guard: when the router still thinks we're on /chat but the URL
@@ -38,6 +39,11 @@ export function TopBar() {
   function handleGoImages() {
     if (pathname?.startsWith('/images')) return
     router.push('/images')
+  }
+
+  function handleGoExplore() {
+    if (pathname?.startsWith('/explore')) return
+    router.push('/explore')
   }
 
   return (
@@ -70,6 +76,19 @@ export function TopBar() {
           title="生图工作台"
         >
           <Sparkles className="w-4 h-4" />
+        </button>
+        <button
+          onClick={handleGoExplore}
+          className={cn(
+            'p-1.5 rounded-lg transition-colors',
+            isExplorePage
+              ? 'bg-accent/15 text-accent'
+              : 'hover:bg-surface-subtle text-content-secondary'
+          )}
+          aria-label="观点探索"
+          title="观点探索"
+        >
+          <Scale className="w-4 h-4" />
         </button>
       </div>
 

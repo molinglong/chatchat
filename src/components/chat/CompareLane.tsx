@@ -30,8 +30,6 @@ interface CompareLaneProps {
   deepThink: boolean
   /** 联网搜索开关(由 ComparePanel 统一控制,每个泳道都带上) */
   webSearch: boolean
-  /** 联网搜索引擎(由 ComparePanel 共享) */
-  searchEngine: string
   onConvIdFromHeader: (newConvId: string, newConvTitle?: string | null) => void
   registerApi: (api: LaneApi | null) => void
   onLoadingChange: (isLoading: boolean) => void
@@ -49,7 +47,6 @@ export function CompareLane({
   styleOffset,
   deepThink,
   webSearch,
-  searchEngine,
   onConvIdFromHeader,
   registerApi,
   onLoadingChange,
@@ -69,7 +66,6 @@ export function CompareLane({
       styleOffset,
       deepThink,
       webSearch,
-      searchEngine,
       get attachments() {
         return attachmentsRef.current
       },
