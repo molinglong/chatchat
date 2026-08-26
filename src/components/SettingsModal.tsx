@@ -235,6 +235,18 @@ export function SettingsModal() {
   const [searchKeyDeleting, setSearchKeyDeleting] = useState<string | null>(null)
   const [searchKeyShowPassword, setSearchKeyShowPassword] = useState<Record<string, boolean>>({})
 
+  // 联网搜索多引擎: 支持的引擎列表 + 当前测试选中引擎 + 启用的引擎
+  const SEARCH_ENGINE_LIST = [
+    { id: 'qianfan' as const, name: '百度千帆', desc: '中文搜索强，需单独申请', docsUrl: 'https://cloud.baidu.com/doc/QIANFAN/s/3l6bavkfm' },
+    { id: 'tavily' as const, name: 'Tavily', desc: '英文及多语言，免费额度可用', docsUrl: 'https://docs.tavily.com/documentation/api-reference/endpoint/search' },
+  ]
+  const [activeSearchEngine, setActiveSearchEngine] = useState<'qianfan' | 'tavily'>('qianfan')
+  // 各引擎开关(默认全开)
+  const [enabledSearchEngines, setEnabledSearchEngines] = useState<Record<string, boolean>>({
+    qianfan: true,
+    tavily: true,
+  })
+
   // 加载联网搜索 Key 列表
   useEffect(() => {
     if (!settingsOpen) return
@@ -532,13 +544,19 @@ export function SettingsModal() {
       setMessage({ type: 'error', text: '请输入搜索关键词' })
       return
     }
+    const currentEngine = activeSearchEngine
+    const currentKey = searchKeys.find((k) => k.engine === currentEngine)
+    if (!currentKey) {
+      setMessage({ type: 'error', text: `请先配置 ${SEARCH_ENGINE_LIST.find((e) => e.id === currentEngine)?.name} 的 API Key` })
+      return
+    }
     setSearchTesting(true)
     setSearchTestResult(null)
     try {
       const res = await fetch('/api/search/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q }),
+        body: JSON.stringify({ query: q, engine: currentEngine }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || '测试失败')
@@ -1225,90 +1243,111 @@ export function SettingsModal() {
               <>
                 {/* 联网搜索 */}
                 {activeSection === 'search' && (() => {
-                  const qianfanKey = searchKeys.find((k) => k.engine === 'qianfan')
-                  const qianfanDraft = searchDraftKeys['qianfan'] ?? ''
-                  const qianfanSaving = searchKeySaving['qianfan'] ?? false
-                  const qianfanDeleting = searchKeyDeleting === 'qianfan'
-                  const qianfanPasswordVisible = searchKeyShowPassword['qianfan'] ?? false
                   return (
                     <div className="space-y-3">
 
-                      {/* 引擎 Key 配置卡片 */}
-                      <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          <Globe className="w-4 h-4 text-content-secondary" />
-                          <p className="text-xs font-semibold text-content-primary">百度千帆</p>
-                          {qianfanKey && (
-                            <span className="ml-auto text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
-                              已配置
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-[11px] text-content-secondary leading-relaxed">
-                          独立 API Key，与服务商 Key 无关，需单独申请。
-                          <a
-                            href="https://cloud.baidu.com/doc/QIANFAN/s/3l6bavkfm"
-                            target="_blank"
-                            rel="noreferrer"
-                            className="ml-1 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5"
-                          >
-                            申请地址 <ExternalLink className="w-2.5 h-2.5" />
-                          </a>
-                        </p>
-
-                        {/* 已配置的 Key 显示 */}
-                        {qianfanKey && (
-                          <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-surface-muted/80 border border-line/40">
-                              <Key className="w-3.5 h-3.5 text-content-muted shrink-0" />
-                              <code className="text-xs text-content-secondary truncate">{qianfanKey.maskedKey}</code>
+                      {/* 多引擎 Key 配置卡片 */}
+                      {SEARCH_ENGINE_LIST.map((engineDef) => {
+                        const key = searchKeys.find((k) => k.engine === engineDef.id)
+                        const draft = searchDraftKeys[engineDef.id] ?? ''
+                        const saving = searchKeySaving[engineDef.id] ?? false
+                        const deleting = searchKeyDeleting === engineDef.id
+                        const passwordVisible = searchKeyShowPassword[engineDef.id] ?? false
+                        const enabled = enabledSearchEngines[engineDef.id] ?? false
+                        return (
+                          <div key={engineDef.id} className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
+                            {/* 引擎标题栏 */}
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <Globe className="w-4 h-4 text-content-secondary shrink-0" />
+                              <p className="text-xs font-semibold text-content-primary">{engineDef.name}</p>
+                              {key && (
+                                <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 font-medium">
+                                  已配置
+                                </span>
+                              )}
+                              {/* 引擎开关 */}
+                              <button
+                                role="switch"
+                                aria-checked={enabled}
+                                onClick={() => setEnabledSearchEngines((prev) => ({ ...prev, [engineDef.id]: !prev[engineDef.id] }))}
+                                className={cn(
+                                  'ml-auto relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-line-strong/50',
+                                  enabled ? 'bg-accent' : 'bg-line-strong/40'
+                                )}
+                              >
+                                <span className={cn(
+                                  'inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform',
+                                  enabled ? 'translate-x-[18px]' : 'translate-x-[2px]'
+                                )} />
+                              </button>
                             </div>
-                            <button
-                              onClick={() => handleDeleteSearchKey('qianfan')}
-                              disabled={qianfanDeleting}
-                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
-                            >
-                              {qianfanDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                              删除
-                            </button>
-                          </div>
-                        )}
 
-                        {/* 输入框 */}
-                        <div className="flex gap-2">
-                          <div className="relative flex-1">
-                            <input
-                              type={qianfanPasswordVisible ? 'text' : 'password'}
-                              value={qianfanDraft}
-                              onChange={(e) => setSearchDraftKeys((d) => ({ ...d, qianfan: e.target.value }))}
-                              placeholder={qianfanKey ? '输入新 Key 替换...' : '粘贴 API Key...'}
-                              className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 pr-8 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setSearchKeyShowPassword((s) => ({ ...s, qianfan: !s['qianfan'] }))}
-                              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-content-muted hover:text-content-primary transition-colors"
-                              tabIndex={-1}
-                            >
-                              {qianfanPasswordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                            </button>
-                          </div>
-                          <button
-                            onClick={() => handleSaveSearchKey('qianfan')}
-                            disabled={!qianfanDraft.trim() || qianfanSaving}
-                            className={cn(
-                              'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
-                              qianfanDraft.trim() && !qianfanSaving
-                                ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
-                                : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                            <p className="text-[11px] text-content-secondary leading-relaxed">
+                              {engineDef.desc}
+                              <a
+                                href={engineDef.docsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="ml-1 text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-0.5"
+                              >
+                                申请地址 <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                            </p>
+
+                            {/* 已配置的 Key 显示 */}
+                            {key && (
+                              <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-surface-muted/80 border border-line/40">
+                                  <Key className="w-3.5 h-3.5 text-content-muted shrink-0" />
+                                  <code className="text-xs text-content-secondary truncate">{key.maskedKey}</code>
+                                </div>
+                                <button
+                                  onClick={() => handleDeleteSearchKey(engineDef.id)}
+                                  disabled={deleting}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                                >
+                                  {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                  删除
+                                </button>
+                              </div>
                             )}
-                          >
-                            {qianfanSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                            保存
-                          </button>
-                        </div>
-                      </div>
+
+                            {/* 输入框 */}
+                            <div className="flex gap-2">
+                              <div className="relative flex-1">
+                                <input
+                                  type={passwordVisible ? 'text' : 'password'}
+                                  value={draft}
+                                  onChange={(e) => setSearchDraftKeys((d) => ({ ...d, [engineDef.id]: e.target.value }))}
+                                  placeholder={key ? '输入新 Key 替换...' : '粘贴 API Key...'}
+                                  className="w-full rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 pr-8 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setSearchKeyShowPassword((s) => ({ ...s, [engineDef.id]: !s[engineDef.id] }))}
+                                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-content-muted hover:text-content-primary transition-colors"
+                                  tabIndex={-1}
+                                >
+                                  {passwordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                              <button
+                                onClick={() => handleSaveSearchKey(engineDef.id)}
+                                disabled={!draft.trim() || saving}
+                                className={cn(
+                                  'px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 shrink-0',
+                                  draft.trim() && !saving
+                                    ? 'bg-accent text-accent-foreground hover:bg-accent/90 active:scale-[0.97]'
+                                    : 'bg-surface-muted text-content-muted cursor-not-allowed'
+                                )}
+                              >
+                                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                                保存
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
 
                       {/* 工作原理 */}
                       <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2">
@@ -1319,17 +1358,39 @@ export function SettingsModal() {
                         <ul className="text-[11px] text-content-secondary space-y-1.5 leading-relaxed">
                           <li>· 配置 Key 后，AI 模型拥有 web_search 工具调用能力</li>
                           <li>· 当 AI 判断需要实时信息时（新闻、数据、最新事件），自动搜索</li>
-                          <li>· 通过百度千帆搜索 API 返回结果，AI 基于真实数据作答</li>
                           <li>· 支持追问、多轮搜索，结果自动注入对话上下文</li>
+                          <li>· 可同时配置多个引擎，AI 会根据实际情况路由</li>
                         </ul>
                       </div>
 
-                      {/* 测试搜索 */}
+                      {/* 测试搜索：引擎选择 + 测试输入 */}
                       <div className="rounded-xl border border-line/60 bg-surface/60 px-3.5 py-3 space-y-2.5">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-2">
                           <Search className="w-3.5 h-3.5 text-content-secondary" />
                           <p className="text-xs font-medium text-content-secondary">测试搜索</p>
+                          {/* 引擎切换 Tab */}
+                          <div className="ml-auto flex items-center gap-1 bg-surface-muted/80 rounded-lg p-0.5">
+                            {SEARCH_ENGINE_LIST.map((e) => {
+                              const hasKey = !!searchKeys.find((k) => k.engine === e.id)
+                              return (
+                                <button
+                                  key={e.id}
+                                  onClick={() => { setActiveSearchEngine(e.id); setSearchTestResult(null) }}
+                                  className={cn(
+                                    'px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
+                                    activeSearchEngine === e.id
+                                      ? 'bg-surface text-content-primary shadow-sm'
+                                      : 'text-content-muted hover:text-content-secondary',
+                                    !hasKey && 'opacity-40'
+                                  )}
+                                >
+                                  {e.name}
+                                </button>
+                              )
+                            })}
+                          </div>
                         </div>
+
                         <div className="flex gap-2">
                           <input
                             type="text"
@@ -1337,12 +1398,12 @@ export function SettingsModal() {
                             onChange={(e) => setSearchQuery(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter') handleTestSearch() }}
                             placeholder="输入关键词，如：今天上海天气"
-                            disabled={!qianfanKey || searchTesting}
+                            disabled={searchTesting || !searchKeys.find((k) => k.engine === activeSearchEngine)}
                             className="flex-1 rounded-lg border border-line/60 bg-surface px-2.5 py-1.5 text-xs text-content-primary placeholder:text-content-muted focus:outline-none focus:ring-2 focus:ring-line-strong/30 disabled:opacity-50"
                           />
                           <button
                             onClick={handleTestSearch}
-                            disabled={!qianfanKey || searchTesting || !searchQuery.trim()}
+                            disabled={searchTesting || !searchQuery.trim()}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-accent text-white hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             {searchTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}

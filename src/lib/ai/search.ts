@@ -1,31 +1,29 @@
 import { tool } from "ai"
 import { z } from "zod"
 import { executeQianfanSearch, type QianfanSearchResult } from "./search-engines/qianfan"
+import { executeTavilySearch, type TavilySearchResult } from "./search-engines/tavily"
+import { type SearchEngineId } from "./search-engines"
 
 /**
- * 百度千帆联网搜索工具
- * 使用百度千帆平台的搜索 API，为 AI 模型提供实时联网搜索能力。
- *
- * 官方文档: https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5
- * 鉴权方式: AppBuilder API Key（独立于文心模型 Key）
- * 实际执行逻辑抽离到 ./search-engines/qianfan.ts，便于被 /api/search/test 等其他模块复用。
+ * 统一搜索结果格式（各引擎的 execute 函数返回此类型）
  */
-
-type SearchResultItem = QianfanSearchResult
+export type SearchResultItem = QianfanSearchResult | TavilySearchResult
 
 /**
  * 格式化搜索结果供 AI 模型阅读
  */
 function formatSearchResults(
   query: string,
+  engine: SearchEngineId,
   results: SearchResultItem[]
 ): string {
   if (results.length === 0) {
     return `搜索「${query}」未找到相关结果。`
   }
 
+  const engineName = engine === "tavily" ? "Tavily" : "百度"
   const lines = [
-    `以下是关于「${query}」的搜索结果（共 ${results.length} 条）：`,
+    `以下是关于「${query}」的搜索结果（共 ${results.length} 条，来自 ${engineName}）：`,
     "",
   ]
 
@@ -44,16 +42,24 @@ function formatSearchResults(
 }
 
 /**
- * 创建百度千帆联网搜索工具（AI SDK tool）
+ * 创建联网搜索工具（AI SDK tool）
  *
- * @param apiKey - 百度千帆 AppBuilder API Key（联网搜索独立 Key，与模型 Key 分开配置）
+ * @param engine  搜索引擎 ID
+ * @param apiKey  对应引擎的 API Key（解密后原文）
  * @returns AI SDK tool 对象
  */
-export function createWebSearchTool(apiKey: string) {
-  return tool({
-    description: `联网搜索工具。当需要获取实时信息、最新新闻、当前事件、或用户明确要求搜索时使用。
+export function createWebSearchTool(engine: SearchEngineId, apiKey: string) {
+  const description =
+    engine === "tavily"
+      ? `联网搜索工具。当需要获取实时信息、最新新闻、当前事件、或用户明确要求搜索时使用。
+输入中文或英文搜索关键词，工具会返回 Tavily 搜索结果（标题、链接、摘要）。
+搜索结果会包含网页标题、URL 和内容摘要，请基于这些信息回答用户问题并注明来源。`
+      : `联网搜索工具。当需要获取实时信息、最新新闻、当前事件、或用户明确要求搜索时使用。
 输入中文或英文搜索关键词，工具会返回百度搜索结果（标题、链接、摘要）。
-搜索结果会包含网页标题、URL 和内容摘要，请基于这些信息回答用户问题并注明来源。`,
+搜索结果会包含网页标题、URL 和内容摘要，请基于这些信息回答用户问题并注明来源。`
+
+  return tool({
+    description,
     inputSchema: z.object({
       query: z
         .string()
@@ -61,12 +67,15 @@ export function createWebSearchTool(apiKey: string) {
     }),
     execute: async ({ query }) => {
       try {
-        const results = await executeQianfanSearch(query, apiKey, 5)
-        return formatSearchResults(query, results)
+        const results =
+          engine === "tavily"
+            ? await executeTavilySearch(query, apiKey, 5)
+            : await executeQianfanSearch(query, apiKey, 5)
+        return formatSearchResults(query, engine, results)
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "未知搜索错误"
-        console.error("[qianfan-search]", message)
+        console.error(`[${engine}-search]`, message)
         return `联网搜索失败: ${message}。请基于你已有的知识回答用户问题，并告知用户搜索暂时不可用。`
       }
     },

@@ -18,7 +18,7 @@ export const PROVIDER_DOT: Record<string, string> = {
   zhipu: 'bg-cyan-500',
   doubao: 'bg-teal-500',
   yi: 'bg-fuchsia-500',
-  custom: 'bg-gray-400', // 自定义模型
+  custom: 'bg-gray-400',
 }
 
 export const PROVIDER_NAMES: Record<string, string> = {
@@ -35,7 +35,7 @@ export const PROVIDER_NAMES: Record<string, string> = {
   zhipu: '智谱 GLM',
   doubao: '字节豆包',
   yi: '零一万物 Yi',
-  custom: '自定义', // 自定义模型
+  custom: '自定义',
 }
 
 interface ModelSelectorProps {
@@ -57,7 +57,6 @@ export function ModelSelector({
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set())
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Fetch configured providers on mount
   useEffect(() => {
     fetch('/api/keys')
       .then((r) => r.json())
@@ -67,7 +66,6 @@ export function ModelSelector({
       .catch(() => {})
   }, [])
 
-  // Re-fetch when dropdown opens (in case settings changed)
   useEffect(() => {
     if (!isOpen) return
     fetch('/api/keys')
@@ -78,12 +76,9 @@ export function ModelSelector({
       .catch(() => {})
   }, [isOpen])
 
-  // Group models by provider (only configured ones; custom always shown)
   const grouped = models.reduce<Record<string, { providerName: string; models: ModelDefinition[] }>>(
     (acc, model) => {
-      // Skip providers that aren't configured (custom always shown)
       if (!configuredProviders.has(model.provider) && model.provider !== 'custom') return acc
-
       if (!acc[model.provider]) {
         acc[model.provider] = {
           providerName: PROVIDER_NAMES[model.provider] || model.provider,
@@ -98,7 +93,6 @@ export function ModelSelector({
 
   const selected = models.find((m) => m.id === selectedModel)
 
-  // Close dropdown on outside click
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
@@ -132,10 +126,7 @@ export function ModelSelector({
               ? 'absolute bottom-full left-0 mb-1 z-50'
               : 'absolute top-full left-0 mt-1 z-50',
             'min-w-[180px] max-h-[260px] overflow-y-auto',
-            'bg-black/30 dark:bg-white/10 backdrop-blur-2xl',
-            'rounded-xl',
-            'shadow-[0_8px_32px_rgba(0,0,0,0.25),0_2px_8px_rgba(0,0,0,0.12)]',
-            'border border-white/10 dark:border-white/8',
+            'bg-surface-muted rounded-xl border border-line/60 shadow-lg',
             'py-1',
             'animate-in fade-in zoom-in-95 duration-150'
           )}

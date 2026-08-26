@@ -21,6 +21,7 @@ import { generateConversationTitle } from "@/lib/ai/title-generator"
 import { getStylePrompt } from "@/lib/ai/style"
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
+import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
 import { sanitizeUploadName, readUploadFile, readUploadAsDataUrl } from "@/lib/uploads"
 import type { ModelDefinition } from "@/lib/ai/types"
@@ -36,6 +37,7 @@ interface ChatRequestBody {
   attachments?: Attachment[]
   styleOffset?: number // 0-100, default 50 if not provided
   webSearch?: boolean // 客户端本次请求是否开启联网搜索
+  searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
 }
 
 /** 客户端传入的消息（UIMessage 格式的结构化子集） */
@@ -173,7 +175,7 @@ export async function POST(req: NextRequest) {
     const userId = session.user.id
 
     const body: ChatRequestBody = await req.json()
-    const { model: modelId, messages: rawMessages, conversationId, deepThink, groupId, webSearch } = body
+    const { model: modelId, messages: rawMessages, conversationId, deepThink, groupId, webSearch, searchEngine } = body
     const attachments = Array.isArray(body.attachments) ? body.attachments : []
     const hasImageAttachments = attachments.some((a) => a.type.startsWith("image/"))
 
@@ -398,28 +400,31 @@ export async function POST(req: NextRequest) {
   // - webSearchEnabled: 客户端本次是否主动开启(默认 false,避免模型无脑触发搜索消耗额度)
   // - searchApiKey: 用户配置的存在性(key 缺失就视为不可用)
   const webSearchEnabled = webSearch === true
+  // 支持多引擎: 客户端指定 engine 或默认 qianfan(向后兼容)
+  const activeEngine: SearchEngineId = searchEngine ?? "qianfan"
   let searchApiKey: string | null = null
   let searchTool: ReturnType<typeof createWebSearchTool> | null = null
   if (webSearchEnabled) {
     try {
       const searchKeyRecord = await prisma.searchApiKey.findUnique({
-        where: { userId_engine: { userId, engine: 'qianfan' } },
+        where: { userId_engine: { userId, engine: activeEngine } },
       })
       if (searchKeyRecord) {
         searchApiKey = decrypt(searchKeyRecord.encryptedKey)
-        searchTool = createWebSearchTool(searchApiKey)
+        searchTool = createWebSearchTool(activeEngine, searchApiKey)
       }
     } catch (err) {
-      console.error('[chat] Failed to load search key for web search:', err)
+      console.error(`[chat] Failed to load search key for engine ${activeEngine}:`, err)
     }
     if (!searchApiKey) {
-      console.warn(`[chat] User ${userId} requested webSearch but no SearchApiKey configured for engine 'qianfan'`)
+      console.warn(`[chat] User ${userId} requested webSearch but no SearchApiKey configured for engine '${activeEngine}'`)
     }
   }
   if (searchTool) {
+    const engineDisplayName = activeEngine === "tavily" ? "Tavily" : "百度千帆"
     systemParts.push([
       '## 联网搜索能力',
-      '你拥有 web_search 工具(基于百度千帆搜索 API)。当用户问题涉及以下场景时,**主动调用 web_search** 一次或多次获取实时信息再作答:',
+      `你拥有 web_search 工具(基于 ${engineDisplayName} 搜索 API)。当用户问题涉及以下场景时,**主动调用 web_search** 一次或多次获取实时信息再作答:`,
       '- 询问新闻、事件、近期发生的事("今天/最新/最近"+时间词)',
       '- 需要事实性数据(股价、天气、比赛结果、排行榜、版本号等)',
       '- 引用具体来源、查证知识、用户要求"查一下"',
@@ -427,7 +432,7 @@ export async function POST(req: NextRequest) {
       '普通闲聊、通用知识问答、代码/翻译/数学等不需要联网。回答时请自然引用来源，不要编造链接。',
     ].join('\n'))
   }
-  console.log(`[chat] webSearchEnabled=${webSearchEnabled}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
+  console.log(`[chat] webSearchEnabled=${webSearchEnabled}, engine=${activeEngine}, searchApiKey=${searchApiKey ? 'loaded' : 'null'}, tools=${searchTool ? 'web_search attached' : 'no tools'}`)
 
   // Always enable reasoning extraction for models that support it or deepThink is enabled
   const shouldExtractReasoning = deepThink || modelDef.supportsReasoning
@@ -525,7 +530,7 @@ export async function POST(req: NextRequest) {
     // 让模型能"思考 → 调工具 → 拿到结果 → 继续生成最终答案",
     // 默认 stepCountIs(1) 会在调完一次工具后立刻停下,无法完成多步链式调用。
     stopWhen: stepCountIs(5),
-    onStepFinish: ({ stepType, toolCalls, toolResults, finishReason }) => {
+    onStepFinish: ({ stepType, toolCalls, toolResults, finishReason }: { stepType?: string; toolCalls?: unknown[]; toolResults?: unknown[]; finishReason?: string }) => {
       console.log(`[chat] step finished: type=${stepType}, toolCalls=${toolCalls?.length ?? 0}, toolResults=${toolResults?.length ?? 0}, finishReason=${finishReason}`)
     },
     onFinish: async ({ text, reasoningText, finishReason, usage }) => {

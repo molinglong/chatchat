@@ -168,7 +168,7 @@ const components: Components = {
   blockquote({ children, ...props }) {
     return (
       <blockquote
-        className="border-l-4 border-line-strong pl-4 my-3 text-content-secondary italic"
+        className="border-l-4 border-line-strong pl-4 pr-3 py-2 my-3 text-content-secondary bg-surface-muted"
         {...props}
       >
         {children}

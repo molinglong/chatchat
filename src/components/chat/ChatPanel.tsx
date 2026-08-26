@@ -102,12 +102,22 @@ export function ChatPanel({
   // 需要后端 /api/search/keys 验证用户是否配置了 SearchApiKey（webSearchAvailable）。
   const [webSearch, setWebSearch] = useState(false)
   const [webSearchAvailable, setWebSearchAvailable] = useState(false)
+  // 多引擎：已配置的引擎列表 + 当前选中引擎
+  const [availableSearchEngines, setAvailableSearchEngines] = useState<string[]>([])
+  const [searchEngine, setSearchEngine] = useState<string>('qianfan')
   useEffect(() => {
     fetch('/api/search/keys')
       .then((r) => (r.ok ? r.json() : []))
       .then((data: Array<{ engine: string }>) => {
-        if (Array.isArray(data)) {
-          setWebSearchAvailable(data.some((k) => k.engine === 'qianfan'))
+        if (Array.isArray(data) && data.length > 0) {
+          const engines = data.map((k) => k.engine)
+          setAvailableSearchEngines(engines)
+          setWebSearchAvailable(true)
+          // 优先用上次选中的引擎(仍在列表中则保留，否则用第一个)
+          setSearchEngine((prev) => (engines.includes(prev) ? prev : engines[0]))
+        } else {
+          setAvailableSearchEngines([])
+          setWebSearchAvailable(false)
         }
       })
       .catch(() => setWebSearchAvailable(false))
@@ -115,8 +125,12 @@ export function ChatPanel({
 
   // 从 localStorage 恢复 webSearch 偏好
   useEffect(() => {
-    if (!initialConversationId && localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true') {
-      setWebSearch(true)
+    if (!initialConversationId) {
+      if (localStorage.getItem(WEB_SEARCH_STORAGE_KEY) === 'true') {
+        setWebSearch(true)
+      }
+      const savedEngine = localStorage.getItem('chat:searchEngine')
+      if (savedEngine) setSearchEngine(savedEngine)
     }
   }, [initialConversationId])
   
@@ -238,6 +252,7 @@ export function ChatPanel({
       conversationId: conversationId,
       deepThink,
       webSearch,
+      searchEngine,
       styleOffset: conversationStyleOffset,
       // Attachments are read from ref at send time
       get attachments() {
@@ -364,6 +379,11 @@ export function ChatPanel({
     localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(enabled))
   }, [])
 
+  const handleSearchEngineChange = useCallback((engine: string) => {
+    setSearchEngine(engine)
+    localStorage.setItem('chat:searchEngine', engine)
+  }, [])
+
   const handleRetry = useCallback(() => {
     clearError()
     regenerate()
@@ -418,6 +438,9 @@ export function ChatPanel({
         webSearch={webSearch}
         onWebSearchChange={handleWebSearchChange}
         webSearchAvailable={webSearchAvailable}
+        searchEngine={searchEngine}
+        availableSearchEngines={availableSearchEngines}
+        onSearchEngineChange={handleSearchEngineChange}
         onCompareModeChange={handleCompareModeChange}
         compareModeAvailable={!conversationId}
         onConversationCreated={handleCompareConversationCreated}
@@ -502,6 +525,9 @@ export function ChatPanel({
         webSearch={webSearch}
         onWebSearchChange={handleWebSearchChange}
         webSearchAvailable={webSearchAvailable}
+        searchEngine={searchEngine}
+        availableSearchEngines={availableSearchEngines}
+        onSearchEngineChange={handleSearchEngineChange}
         compareMode={false}
         compareModeAvailable={!conversationId}
         onCompareModeChange={handleCompareModeChange}

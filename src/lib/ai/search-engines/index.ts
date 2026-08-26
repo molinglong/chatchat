@@ -9,6 +9,12 @@ export const SEARCH_ENGINES = {
     description: "百度千帆搜索 API，需单独申请，与模型服务商 Key 无关",
     docsUrl: "https://cloud.baidu.com/doc/QIANFAN/s/3l6bavkfm",
   },
+  tavily: {
+    id: "tavily",
+    name: "Tavily",
+    description: "Tavily Search API，支持英文及多语言搜索，免费额度可用",
+    docsUrl: "https://docs.tavily.com/documentation/api-reference/endpoint/search",
+  },
 } as const
 
 export type SearchEngineId = keyof typeof SEARCH_ENGINES

@@ -26,6 +26,11 @@ interface ComparePanelProps {
   webSearch: boolean
   onWebSearchChange: (enabled: boolean) => void
   webSearchAvailable: boolean
+  /** 当前联网搜索引擎 */
+  searchEngine: string
+  /** 可用的联网搜索引擎列表 */
+  availableSearchEngines: string[]
+  onSearchEngineChange: (engine: string) => void
   /** 关闭对比模式(仅新对话时可关闭,由父级提供) */
   onCompareModeChange?: (enabled: boolean) => void
   compareModeAvailable?: boolean
@@ -44,6 +49,9 @@ export function ComparePanel({
   webSearch,
   onWebSearchChange,
   webSearchAvailable,
+  searchEngine,
+  availableSearchEngines,
+  onSearchEngineChange,
   onCompareModeChange,
   compareModeAvailable,
   onConversationCreated,
@@ -236,6 +244,7 @@ export function ComparePanel({
                   styleOffset={styleOffset}
                   deepThink={deepThink}
                   webSearch={webSearch}
+                  searchEngine={searchEngine}
                   onConvIdFromHeader={handleConvIdFromHeader}
                   registerApi={(api) => registerApi(modelId, api)}
                   onLoadingChange={(loading) => handleLoadingChange(modelId, loading)}
@@ -264,6 +273,9 @@ export function ComparePanel({
         webSearch={webSearch}
         onWebSearchChange={onWebSearchChange}
         webSearchAvailable={webSearchAvailable}
+        searchEngine={searchEngine}
+        availableSearchEngines={availableSearchEngines}
+        onSearchEngineChange={onSearchEngineChange}
         compareMode
         compareModeAvailable={compareModeAvailable}
         onCompareModeChange={onCompareModeChange}
