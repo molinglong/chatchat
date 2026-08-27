@@ -57,7 +57,6 @@ export function ComparePanel({
   // 共享 ref
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const groupIdRef = useRef<string>('')
-  const attachmentsRef = useRef<Attachment[] | undefined>(undefined)
   const laneApis = useRef<Map<string, LaneApi>>(new Map())
   const loadingStates = useRef<Map<string, boolean>>(new Map())
   const compareModelsRef = useRef(compareModels)
@@ -105,7 +104,6 @@ export function ComparePanel({
   // 首轮发送前先创建对比会话,规避 N 个并发请求各自建会话的竞态
   const handleSend = useCallback(
     async (text: string, attachments?: Attachment[]) => {
-      attachmentsRef.current = attachments
       let convId = conversationIdRef.current
       if (!convId) {
         try {
@@ -138,10 +136,10 @@ export function ComparePanel({
         }
       }
       groupIdRef.current = crypto.randomUUID()
+      // 把 attachments 直接传给每个泳道 —— 不再用共享 ref,避免后调用的泳道读到的已被清空
       for (const modelId of compareModelsRef.current) {
         laneApis.current.get(modelId)?.send(text, attachments)
       }
-      attachmentsRef.current = undefined
     },
     [styleOffset, setCurrentConversationId, setConversationTitle, bumpConversationVersion, onConversationCreated]
   )
@@ -232,7 +230,6 @@ export function ComparePanel({
                   initialMessages={initialLaneMessages[index] ?? []}
                   conversationIdRef={conversationIdRef}
                   groupIdRef={groupIdRef}
-                  attachmentsRef={attachmentsRef}
                   styleOffset={styleOffset}
                   deepThink={deepThink}
                   webSearch={webSearch}
@@ -275,7 +272,7 @@ export function ComparePanel({
       {soloModelId && soloModelDef && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/20 backdrop-blur-[12px] saturate-150 dark:bg-white/15 dark:saturate-150"
             onClick={() => !converting && setSoloModelId(null)}
           />
           <div className="relative w-[360px] max-w-[90vw] rounded-2xl border border-line/60 bg-surface p-5 shadow-2xl">

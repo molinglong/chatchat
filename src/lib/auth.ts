@@ -52,15 +52,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       const userId = (token.sub ?? token.id) as string | undefined
       if (!userId || !session.user) return session
 
-      // JWTs can survive a local database restore. Do not expose a session
-      // whose user no longer exists in the active database.
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { id: true },
-      })
-      if (!user) return session
-
-      session.user.id = user.id
+      session.user.id = userId
       return session
     },
   },

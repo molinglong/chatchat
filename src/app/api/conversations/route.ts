@@ -8,19 +8,23 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // 限量分页: ?limit=20&offset=0,limit 上限 100
+  // 限量分页: ?limit=20&offset=0,limit 上限 100;?q=关键词支持按标题搜索
   const { searchParams } = new URL(req.url)
   const parsedLimit = parseInt(searchParams.get('limit') ?? '20', 10)
   const parsedOffset = parseInt(searchParams.get('offset') ?? '0', 10)
   const limit = Math.min(Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20, 100)
   const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0
+  const q = (searchParams.get('q') ?? '').trim()
+
+  const where = {
+    userId: session.user.id,
+    ...(q ? { title: { contains: q } } : {}),
+  }
 
   const [total, conversations] = await Promise.all([
-    prisma.conversation.count({
-      where: { userId: session.user.id },
-    }),
+    prisma.conversation.count({ where }),
     prisma.conversation.findMany({
-      where: { userId: session.user.id },
+      where,
       orderBy: { updatedAt: 'desc' },
       select: {
         id: true,

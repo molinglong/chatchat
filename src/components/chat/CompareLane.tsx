@@ -25,7 +25,6 @@ interface CompareLaneProps {
   initialMessages: UIMessage[]
   conversationIdRef: React.MutableRefObject<string | null>
   groupIdRef: React.MutableRefObject<string>
-  attachmentsRef: React.MutableRefObject<Attachment[] | undefined>
   styleOffset: number
   deepThink: boolean
   /** 联网搜索开关(由 ComparePanel 统一控制,每个泳道都带上) */
@@ -43,7 +42,6 @@ export function CompareLane({
   initialMessages,
   conversationIdRef,
   groupIdRef,
-  attachmentsRef,
   styleOffset,
   deepThink,
   webSearch,
@@ -52,6 +50,10 @@ export function CompareLane({
   onLoadingChange,
   onRequestSolo,
 }: CompareLaneProps) {
+  // 每个泳道独立持有自己的 attachmentsRef —— 避免父组件共享 ref 导致多泳道并发 fetch 时
+  // 第一个泳道把 ref 清掉、后续泳道 fetch 时读到 undefined 的竞态
+  const transportAttachmentsRef = useRef<Attachment[] | undefined>(undefined)
+
   // Create transport with dynamic body getters so values are read at send time
   const transport = new DefaultChatTransport<UIMessage>({
     api: '/api/chat',
@@ -67,7 +69,7 @@ export function CompareLane({
       deepThink,
       webSearch,
       get attachments() {
-        return attachmentsRef.current
+        return transportAttachmentsRef.current
       },
     },
     // 兜底: 若客户端预创建会话失败,以服务端返回头为准
@@ -150,8 +152,9 @@ export function CompareLane({
   useEffect(() => {
     registerApi({
       send: (text, attachments) => {
-        // 传输用共享 ref(请求体 getter 读取),UI 注入用本泳道私有 ref
-        attachmentsRef.current = attachments
+        // 写本泳道私有的 transport ref(供请求体 getter 在 fetch 时读取)
+        // 同时也写 pendingAttachmentsRef(供 UI 注入最后一条 user message)
+        transportAttachmentsRef.current = attachments
         pendingAttachmentsRef.current = attachments
         sendMessage({ text })
       },
@@ -162,7 +165,7 @@ export function CompareLane({
       registerApi(null)
       onLoadingChange(false)
     }
-  }, [sendMessage, stop, regenerate, registerApi, onLoadingChange, attachmentsRef])
+  }, [sendMessage, stop, regenerate, registerApi, onLoadingChange])
 
   useEffect(() => {
     onLoadingChange(isLoading)

@@ -54,5 +54,13 @@ uploads/
 npm_error.txt
 npm_output.txt
 
+# SQLite migration 临时备份(防止意外入库)
+/dev.db.before-*
+/dev.db.empty-before-restore
+
 # Generated
 src/generated/
+
+# Deploy
+deploy/.env.production
+deploy/backups/

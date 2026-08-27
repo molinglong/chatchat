@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search } from 'lucide-react'
+import { Save, Trash2, Loader2, CheckCircle, AlertCircle, Key, Eye, EyeOff, Zap, ExternalLink, Brain, Plus, Settings2, HelpCircle, Info, MessageSquare, GitBranch, Cpu, Wrench, BarChart3, ChevronUp, ChevronDown, Filter, LayoutDashboard, Sparkles, ImageIcon, Check, RefreshCw, Globe, Search, LogOut, User } from 'lucide-react'
+import { signOut, useSession } from 'next-auth/react'
 import { cn } from '@/lib/utils'
 import { useChatStore } from '@/store/chat-store'
 import { StyleSlider } from '@/components/chat/StyleSlider'
@@ -177,6 +178,7 @@ export function SettingsModal() {
   const [memoryDeleting, setMemoryDeleting] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<SectionId>('overview')
   const [themeChoice, setThemeChoice] = useState<ThemeChoice>('system')
+  const [welcomeDismissed, setWelcomeDismissed] = useState<boolean>(true)
 
   // Custom model state
   const [customModels, setCustomModels] = useState<SavedCustomModel[]>([])
@@ -220,6 +222,12 @@ export function SettingsModal() {
 
   // 联网搜索：当前选中引擎（来自共享 store，滑块和 ChatPanel 共用）
   const searchEngine = useChatStore((s) => s.searchEngine)
+  const { data: session } = useSession()
+
+  // 退出登录
+  const handleSignOut = async () => {
+    await signOut({ callbackUrl: '/login' })
+  }
 
   // 联网搜索设置状态
   const [searchQuery, setSearchQuery] = useState('')
@@ -274,7 +282,7 @@ export function SettingsModal() {
   // Provider section collapse states and display filter
   const [configuredCollapsed, setConfiguredCollapsed] = useState(false)
   const [unconfiguredCollapsed, setUnconfiguredCollapsed] = useState(true)
-  const [showOnlyConfigured, setShowOnlyConfigured] = useState(true)
+  const [showOnlyConfigured, setShowOnlyConfigured] = useState(false)
 
   // Fetch data when modal opens
   useEffect(() => {
@@ -348,6 +356,11 @@ export function SettingsModal() {
     setThemeChoice(stored === 'light' || stored === 'dark' ? stored : 'system')
   }, [])
 
+  // Init welcome dismissed state from localStorage (首次启动时显示)
+  useEffect(() => {
+    setWelcomeDismissed(localStorage.getItem('chat:welcomeDismissed') === '1')
+  }, [])
+
   // 生图设置自动保存：模型 + 尺寸变化时 PATCH
   useEffect(() => {
     if (!imageSettingsLoadedRef.current) return
@@ -401,6 +414,11 @@ export function SettingsModal() {
       localStorage.setItem('theme', choice)
       document.documentElement.classList.toggle('dark', choice === 'dark')
     }
+  }
+
+  function dismissWelcome() {
+    setWelcomeDismissed(true)
+    localStorage.setItem('chat:welcomeDismissed', '1')
   }
 
   const getKeyForProvider = useCallback(
@@ -987,9 +1005,9 @@ export function SettingsModal() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
-      {/* Backdrop */}
+      {/* Backdrop — 主题感知磨砂:深色模式用亮色微染色 + 亮色模式用暗色微染色 + 12px 模糊 + 增饱和度 */}
       <div
-        className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/20 backdrop-blur-[12px] saturate-150 dark:bg-white/15 dark:backdrop-blur-[12px] dark:saturate-150"
         onClick={() => setSettingsOpen(false)}
       />
 
@@ -1083,20 +1101,67 @@ export function SettingsModal() {
             {/* 总览 - 始终显示，不需要等 loading */}
             {activeSection === 'overview' && (
               <div className="space-y-3">
-                {/* 欢迎卡片 */}
-                <div className="rounded-xl border border-line/60 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent px-4 py-3.5">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
-                      <Sparkles className="w-5 h-5 text-accent" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-content-primary">欢迎使用八号产房</p>
-                      <p className="text-[11px] text-content-muted mt-0.5 leading-relaxed">
-                        在这里管理你的 AI 服务商、记忆设置和用量统计
-                      </p>
+                {/* 欢迎卡片 - 首次启动时显示，用户关闭后记住状态 */}
+                {!welcomeDismissed && (
+                  <div className="relative rounded-xl border border-line/60 bg-gradient-to-br from-accent/10 via-accent/5 to-transparent px-4 py-3.5">
+                    <button
+                      onClick={dismissWelcome}
+                      className="absolute top-2 right-2 p-1 rounded-md text-content-muted hover:text-content-primary hover:bg-surface-subtle/60 transition-colors"
+                      aria-label="关闭欢迎卡片"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                    <div className="flex items-start gap-3 pr-6">
+                      <div className="w-10 h-10 rounded-lg bg-accent/20 flex items-center justify-center shrink-0">
+                        <Sparkles className="w-5 h-5 text-accent" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-content-primary">欢迎使用八号产房</p>
+                        <p className="text-[11px] text-content-muted mt-0.5 leading-relaxed">
+                          在这里管理你的 AI 服务商、记忆设置和用量统计
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+
+                {/* 账户信息 */}
+                {session?.user && (
+                  <div className="rounded-xl border border-line/60 bg-surface/60 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-accent/20 flex items-center justify-center shrink-0">
+                          {session.user.image ? (
+                            <img
+                              src={session.user.image}
+                              alt={session.user.name ?? '用户'}
+                              className="w-full h-full rounded-full object-cover"
+                            />
+                          ) : (
+                            <User className="w-4 h-4 text-accent" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-content-primary truncate">
+                            {session.user.name ?? '用户'}
+                          </p>
+                          <p className="text-[11px] text-content-muted truncate">
+                            {session.user.email}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleSignOut}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium text-red-500/70 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        退出登录
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* 快捷状态卡片 */}
                 <div className="grid grid-cols-2 gap-2">
@@ -1180,50 +1245,29 @@ export function SettingsModal() {
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       onClick={() => setActiveSection('providers')}
-                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                      className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
                     >
                       <Plus className="w-3 h-3" /> 添加服务商
                     </button>
                     <button
                       onClick={() => setActiveSection('providers')}
-                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                      className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
                     >
                       <Cpu className="w-3 h-3" /> 自定义模型
                     </button>
                     <button
                       onClick={() => setActiveSection('memory')}
-                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                      className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
                     >
                       <Brain className="w-3 h-3" /> 管理记忆
                     </button>
                     <button
                       onClick={() => setActiveSection('usage')}
-                      className="px-2.5 py-1.5 rounded-lg text-[11px] bg-surface-muted text-content-secondary hover:bg-surface-subtle transition-colors flex items-center gap-1.5"
+                      className="px-3 py-1.5 rounded-full text-[11px] bg-accent/10 text-accent hover:bg-accent/20 transition-colors flex items-center gap-1.5"
                     >
                       <BarChart3 className="w-3 h-3" /> 查看用量
                     </button>
                   </div>
-                </div>
-
-                {/* 当前对话风格 */}
-                <div className="rounded-xl border border-line/60 bg-surface/60 px-3 py-2.5">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-[11px] font-medium text-content-secondary">当前对话风格</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-1.5 rounded-full bg-surface-muted overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-accent/70"
-                        style={{ width: `${conversationStyleOffset}%` }}
-                      />
-                    </div>
-                    <span className="text-[11px] text-content-muted font-mono shrink-0">
-                      {conversationStyleOffset}
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-content-muted mt-1 text-left">
-                    {getStyleLabel(conversationStyleOffset)}
-                  </p>
                 </div>
               </div>
             )}
@@ -1276,13 +1320,13 @@ export function SettingsModal() {
                             )}>Tavily</span>
                           </div>
 
-                          {/* 轨道背景 */}
-                          <div className="relative h-7 rounded-full bg-surface-muted border border-line/60">
-                            {/* 选中高亮滑块 */}
+                          {/* 音量风格滑块轨道 */}
+                          <div className="relative h-2 rounded-full bg-surface-muted border border-line/60">
+                            {/* 渐变填充 */}
                             <div
                               className={cn(
-                                'absolute top-0.5 bottom-0.5 w-1/2 rounded-full bg-accent/20 border border-accent/40 transition-all duration-200',
-                                searchEngine === 'tavily' && 'left-1/2'
+                                'absolute top-0 bottom-0 left-0 rounded-full bg-accent/60 transition-all duration-200',
+                                searchEngine === 'tavily' ? 'right-0' : 'w-1/2'
                               )}
                             />
                             {/* 滑块thumb */}
@@ -1300,11 +1344,11 @@ export function SettingsModal() {
                               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                               aria-label="选择联网搜索引擎"
                             />
-                            {/* 滑块圆点（浮在轨道上） */}
+                            {/* 滑块圆点 */}
                             <div
                               className={cn(
-                                'absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-accent shadow-sm transition-all duration-200',
-                                searchEngine === 'tavily' ? 'left-[calc(50%+4px)]' : 'left-1'
+                                'absolute top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-white dark:bg-surface border-2 border-accent shadow-md transition-all duration-200 cursor-pointer',
+                                searchEngine === 'tavily' ? 'right-0 mr-[-8px]' : 'left-1/2 ml-[-8px]'
                               )}
                             />
                           </div>
@@ -2747,9 +2791,6 @@ export function SettingsModal() {
 
         {/* Footer status bar */}
         <div className="shrink-0 px-4 py-2 border-t border-line/60 flex items-center gap-2">
-          <span className="text-[10px] text-content-muted">
-            {keys.length} 个服务商已配置 · {memories.length} 条记忆
-          </span>
           <kbd className="ml-auto text-[10px] text-content-muted px-1.5 py-0.5 rounded border border-line bg-surface-muted font-mono">ESC</kbd>
         </div>
       </div>

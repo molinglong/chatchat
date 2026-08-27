@@ -75,9 +75,11 @@ export function TruthSummary({
         }),
       })
 
-      if (!res.ok) throw new Error('生成摘要失败')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || `请求失败 (${res.status})`)
+      }
 
-      const data = await res.json()
       setResult(data.summary)
     } catch (err) {
       console.error('Failed to generate summary:', err)

@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── PingFang SC Ultralight 苹方极细 ───────────────────── */
+@font-face {
+  font-family: 'PingFang Ultralight';
+  src: url('/fonts/pingfangsc-ultralight.otf') format('opentype');
+  font-weight: 100;
+  font-display: swap;
+}
+
 /* ── 统一配色体系：macOS 极简黑白灰 + 单一中灰强调色 ───────────── */
 /* 变量采用 RGB 三元组（配合 Tailwind 的 rgb(var(--x) / <alpha>) 支持透明度）*/
 :root {
@@ -90,15 +98,15 @@ body {
   background-color: rgba(255, 255, 255, 0.18);
 }
 
-/* Custom scrollbar */
+/* Custom scrollbar — 更细更浅,默认几乎隐形 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(var(--content-muted)) transparent;
+  scrollbar-color: rgb(var(--content-muted) / 0.25) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 3px;
+  height: 3px;
 }
 
 *::-webkit-scrollbar-track {
@@ -106,12 +114,13 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: rgb(var(--content-muted));
+  background-color: rgb(var(--content-muted) / 0.25);
   border-radius: 9999px;
+  transition: background-color 200ms ease;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(var(--content-secondary));
+  background-color: rgb(var(--content-secondary) / 0.5);
 }
 
 /* Default transitions for interactive elements */

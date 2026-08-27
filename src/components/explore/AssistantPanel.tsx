@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Search, Brain, Loader2, ChevronDown, ChevronUp, Globe, Sparkles } from 'lucide-react'
+import { Search, Brain, Loader2, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { SearchResults, type SearchStructured } from './SearchResults'
 
 interface AssistantPanelProps {
   topic?: string
@@ -13,6 +14,7 @@ interface AssistantPanelProps {
   searching: boolean
   analysis?: string | null
   evidenceResults?: string | null
+  evidenceStructured?: SearchStructured | null
 }
 
 type Tab = 'search' | 'logic' | 'polish'
@@ -26,19 +28,50 @@ export function AssistantPanel({
   searching,
   analysis,
   evidenceResults,
+  evidenceStructured,
 }: AssistantPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('search')
   const [searchQuery, setSearchQuery] = useState('')
-  const [expandedSearch, setExpandedSearch] = useState(true)
+  const [searchSummary, setSearchSummary] = useState<string | null>(null)
+  const [summarizing, setSummarizing] = useState(false)
 
   const handleSearch = () => {
     if (!searchQuery.trim()) return
+    setSearchSummary(null)
     onSearch(searchQuery)
   }
 
   const handleLogicAnalyze = () => {
     if (!userMessage) return
     onAnalyze(userMessage)
+  }
+
+  const handleSummarize = async (query: string) => {
+    if (!evidenceStructured) return
+    const allItems = evidenceStructured.groups.flatMap(g => g.items)
+    if (allItems.length === 0) return
+    setSummarizing(true)
+    setSearchSummary(null)
+    try {
+      const res = await fetch('/api/explore/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'evidence-suggestion',
+          content: `请基于以下搜索证据, 用 2-3 句话总结这些证据对"${query}"这个议题的整体倾向（是支持、反对、还是混合证据）。不要列条目,直接给结论。`,
+          topic: query,
+          model: localStorage.getItem('aichatt_assistant_model') || 'gpt-4o',
+          contextSnippets: allItems.map(i => ({ title: i.title, snippet: i.snippet, source: i.source })),
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '提炼失败')
+      setSearchSummary(data.analysis)
+    } catch (err) {
+      setSearchSummary('提炼失败: ' + (err instanceof Error ? err.message : '请重试'))
+    } finally {
+      setSummarizing(false)
+    }
   }
 
   const suggestedQueries = topic ? [
@@ -123,7 +156,17 @@ export function AssistantPanel({
               </div>
             )}
 
-            {evidenceResults && !searching && (
+            {!searching && evidenceStructured && (
+              <SearchResults
+                data={evidenceStructured}
+                summary={searchSummary}
+                summarizing={summarizing}
+                onSummarize={handleSummarize}
+              />
+            )}
+
+            {!searching && !evidenceStructured && evidenceResults && (
+              // 兜底: 如果后端没返回结构化数据, 显示原文
               <div className="p-3 rounded-lg bg-surface border border-line/60">
                 <div className="flex items-center gap-2 mb-2">
                   <Globe className="w-3 h-3 text-emerald-500" />

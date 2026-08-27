@@ -5,8 +5,13 @@ import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { decrypt } from '@/lib/crypto'
-import { getProviderForModel, createProviderInstance } from '@/lib/ai/registry'
+import { getProviderForModel, createProviderInstance, getModel } from '@/lib/ai/registry'
 import { generateText } from 'ai'
+import {
+  resolveApiKey,
+  createCustomLanguageModel,
+  type CustomModelRow,
+} from '@/lib/ai/custom-model'
 
 export async function POST(request: Request) {
   try {
@@ -15,30 +20,61 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { type, content, topic, model: modelId, conversationHistory } = await request.json()
+    const { type, content, topic, model: modelId, conversationHistory, contextSnippets } = await request.json()
 
     if (!type || !content?.trim()) {
       return NextResponse.json({ error: 'Type and content are required' }, { status: 400 })
     }
 
     const userId = session.user.id
-
-    // 获取模型对应的 API Key
     const model = modelId || 'gpt-4o'
-    const provider = getProviderForModel(model)
 
-    let keyRecord: { encryptedKey: string } | null = null
+    // 1. 内置模型路径
+    const provider = getProviderForModel(model)
+    let apiKey: string | undefined
+    let aiModel: any
+
     if (provider) {
-      keyRecord = await prisma.apiKey.findUnique({
+      const keyRecord = await prisma.apiKey.findUnique({
         where: { userId_provider: { userId, provider: provider.id } },
       })
+      if (!keyRecord?.encryptedKey) {
+        return NextResponse.json(
+          { error: `未配置 ${provider.displayName || provider.id} 的 API Key` },
+          { status: 400 }
+        )
+      }
+      apiKey = decrypt(keyRecord.encryptedKey)
+      const aiProvider = createProviderInstance(model, apiKey)
+      aiModel = aiProvider(model)
+    } else if (model.startsWith('custom:')) {
+      // 2. 自定义模型路径
+      const customId = model.slice('custom:'.length)
+      const cm = await prisma.customModel.findFirst({
+        where: { id: customId, userId },
+      })
+      if (!cm) {
+        return NextResponse.json({ error: '自定义模型不存在' }, { status: 404 })
+      }
+      const row: CustomModelRow = {
+        id: cm.id,
+        userId: cm.userId,
+        name: cm.name,
+        modelId: cm.modelId,
+        baseURL: cm.baseURL,
+        protocol: cm.protocol,
+        apiKey: cm.apiKey,
+        keyProvider: cm.keyProvider,
+        contextWindow: cm.contextWindow,
+        supportsVision: cm.supportsVision,
+        supportsFiles: cm.supportsFiles,
+        supportsReasoning: cm.supportsReasoning,
+      }
+      apiKey = await resolveApiKey(userId, row)
+      aiModel = createCustomLanguageModel(row, apiKey)
+    } else {
+      return NextResponse.json({ error: `未知模型: ${model}` }, { status: 400 })
     }
-
-    if (!keyRecord?.encryptedKey || !provider) {
-      return NextResponse.json({ error: 'No API key available' }, { status: 401 })
-    }
-
-    const apiKey = decrypt(keyRecord.encryptedKey)
 
     // 根据类型构建提示
     let systemPrompt = ''
@@ -68,9 +104,12 @@ export async function POST(request: Request) {
         break
 
       case 'evidence-suggestion':
-        systemPrompt = `你是一位研究助手，负责帮助用户找到支撑论点的论据。
-基于用户提供的论点，建议一些可以搜索的关键词或角度。
-请用简洁的语言给出建议。`
+        systemPrompt = `你是一位研究助手。
+根据用户给定的议题和搜索证据，你需要：
+1. 用 2-3 句话直接总结这些证据对该议题的整体倾向（支持 / 反对 / 混合）
+2. 指出最值得引用的一两条核心证据（用一句话提及标题或来源即可）
+3. 不要列条目，不要 markdown，直接给连续段落
+4. 保持中文`
         break
 
       default:
@@ -81,25 +120,33 @@ export async function POST(request: Request) {
     const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = []
 
     if (conversationHistory && Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      // 添加上下文
       messages.push({
         role: 'system',
         content: `辩论主题：${topic || '未指定'}`,
       })
       messages.push({
         role: 'system',
-        content: `辩论历史：\n${conversationHistory.map((m: { role: string; content: string }, i: number) => 
+        content: `辩论历史：\n${conversationHistory.map((m: { role: string; content: string }, i: number) =>
           `${i + 1}. [${m.role}] ${m.content}`
         ).join('\n')}`,
+      })
+    }
+
+    // 搜索证据片段 (用于 evidence-suggestion)
+    if (contextSnippets && Array.isArray(contextSnippets) && contextSnippets.length > 0) {
+      messages.push({
+        role: 'system',
+        content: `搜索证据：\n${contextSnippets.map((s: { title: string; snippet: string; source?: string }, i: number) =>
+          `${i + 1}. ${s.title}${s.source ? ` (${s.source})` : ''}\n   ${s.snippet}`
+        ).join('\n\n')}`,
       })
     }
 
     messages.push({ role: 'user', content: userPrompt })
 
     // 生成分析
-    const aiProvider = createProviderInstance(model, apiKey)
     const result = await generateText({
-      model: aiProvider(model),
+      model: aiModel,
       system: systemPrompt,
       messages,
     })

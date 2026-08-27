@@ -1,14 +1,13 @@
 'use client'
 
-import { Menu, Settings as SettingsIcon, Plus, Sparkles, Scale } from 'lucide-react'
+import { Plus, Sparkles, Scale } from 'lucide-react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useChatStore } from '@/store/chat-store'
 import { useEffect, useState } from 'react'
-import { ThemeToggle } from './ThemeToggle'
 import { cn } from '@/lib/utils'
 
 export function TopBar() {
-  const { toggleSidebar, setSettingsOpen, conversationTitle } = useChatStore()
+  const { conversationTitle } = useChatStore()
   const [title, setTitle] = useState(conversationTitle)
   const router = useRouter()
   const pathname = usePathname()
@@ -24,15 +23,19 @@ export function TopBar() {
   const displayTitle = isImagesPage ? '生图工作台' : isExplorePage ? '观点探索' : (title || '新对话')
 
   function handleNewChat() {
-    // Same-route guard: when the router still thinks we're on /chat but the URL
-    // was rewritten to /chat/c/[id] via history.replaceState, a push to /chat is
-    // a no-op. Hard-navigate to a truly fresh chat panel.
+    // 已经在空白聊天页: 直接通过 popstate / replace 强制刷新组件,
+    // 不再用 window.location.href 硬跳(避免侧边栏 store 重置引发闪烁).
     if (pathname === '/chat') {
-      if (window.location.pathname !== '/chat') {
-        window.location.href = '/chat'
-      }
+      router.replace('/chat')
+      router.refresh()
       return
     }
+    // 在某个对话里 (/chat/c/xxx): SPA push 回到空白页,让 ChatPanel 重置内部状态
+    if (pathname?.startsWith('/chat/')) {
+      router.push('/chat')
+      return
+    }
+    // 在生图/探索页: 走 SPA push,侧边栏 store 在 zustand 单例里保持不变,不会闪烁
     router.push('/chat')
   }
 
@@ -47,69 +50,65 @@ export function TopBar() {
   }
 
   return (
-    <header className="relative flex items-center justify-between h-9 px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl overflow-hidden">
-      {/* Left: sidebar toggle (mobile) + new chat */}
-      <div className="flex items-center gap-0.5">
-        <button
-          onClick={toggleSidebar}
-          className="p-1.5 rounded-lg hover:bg-surface-subtle lg:hidden transition-colors"
-          aria-label="切换侧边栏"
-        >
-          <Menu className="w-4 h-4 text-content-secondary" />
-        </button>
-        <button
-          onClick={handleNewChat}
-          className="p-1.5 rounded-lg hover:bg-surface-subtle transition-colors"
-          aria-label="新对话"
-        >
-          <Plus className="w-4 h-4 text-content-secondary" />
-        </button>
-        <button
-          onClick={handleGoImages}
-          className={cn(
-            'p-1.5 rounded-lg transition-colors',
-            isImagesPage
-              ? 'bg-accent/15 text-accent'
-              : 'hover:bg-surface-subtle text-content-secondary'
-          )}
-          aria-label="生图工作台"
-          title="生图工作台"
-        >
-          <Sparkles className="w-4 h-4" />
-        </button>
-        <button
-          onClick={handleGoExplore}
-          className={cn(
-            'p-1.5 rounded-lg transition-colors',
-            isExplorePage
-              ? 'bg-accent/15 text-accent'
-              : 'hover:bg-surface-subtle text-content-secondary'
-          )}
-          aria-label="观点探索"
-          title="观点探索"
-        >
-          <Scale className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Center: title */}
-      <div className="absolute left-1/2 -translate-x-1/2 pointer-events-none">
-        <span className="text-xs font-medium text-content-muted">
+    <header className="relative flex items-center h-9 px-2 shrink-0 m-1.5 rounded-xl border border-line/50 bg-surface-glass backdrop-blur-xl">
+      {/* Left: 当前页标题(限宽避免与胶囊重叠) */}
+      <div className="flex items-center gap-0.5 min-w-0 flex-1 max-w-[40%]">
+        <span className="text-xs font-medium text-content-muted truncate ml-1">
           {displayTitle}
         </span>
       </div>
 
-      {/* Right: theme toggle + settings */}
-      <div className="flex items-center gap-0.5">
-        <ThemeToggle className="p-1.5 rounded-lg" />
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="p-1.5 rounded-lg hover:bg-surface-subtle transition-colors"
-          aria-label="设置"
-        >
-          <SettingsIcon className="w-4 h-4 text-content-secondary" />
-        </button>
+      {/* Center: 胶囊选项卡(聊天 / 生图 / 探索) — 绝对居中,不受标题长度影响 */}
+      <div className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none">
+        {/* 胶囊容器 */}
+        <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-subtle/70 pointer-events-auto">
+          <button
+            onClick={handleNewChat}
+            className={cn(
+              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150',
+              !isImagesPage && !isExplorePage
+                ? 'bg-surface text-content-primary shadow-sm'
+                : 'text-content-secondary hover:text-content-primary'
+            )}
+            aria-label="新对话"
+            title="新对话"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>聊天</span>
+          </button>
+          <button
+            onClick={handleGoImages}
+            className={cn(
+              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150',
+              isImagesPage
+                ? 'bg-surface text-content-primary shadow-sm'
+                : 'text-content-secondary hover:text-content-primary'
+            )}
+            aria-label="生图工作台"
+            title="生图工作台"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>生图</span>
+          </button>
+          <button
+            onClick={handleGoExplore}
+            className={cn(
+              'flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150',
+              isExplorePage
+                ? 'bg-surface text-content-primary shadow-sm'
+                : 'text-content-secondary hover:text-content-primary'
+            )}
+            aria-label="观点探索"
+            title="观点探索"
+          >
+            <Scale className="w-3.5 h-3.5" />
+            <span>探索</span>
+          </button>
+        </div>
       </div>
+
+      {/* Right: 镜像占位,与左侧等宽,保证胶囊视觉居中 */}
+      <div className="flex items-center gap-0.5 min-w-0 flex-1 max-w-[40%] justify-end" />
     </header>
   )
 }

@@ -9,6 +9,7 @@ import Link from 'next/link'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
 import { ComparePanel } from './ComparePanel'
+import { OutlineSidebar } from './OutlineSidebar'
 import { useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
 import type { ModelDefinition } from '@/lib/ai/types'
@@ -47,20 +48,6 @@ export function ChatPanel({
   laneInitialMessages,
   initialStyleOffset,
 }: ChatPanelProps) {
-  // DEBUG: Log props
-  console.log('[ChatPanel] Render with props:', {
-    initialConversationId,
-    initialMessagesCount: initialMessages?.length,
-    initialModel,
-    allModelsCount: allModels?.length,
-    conversationTitle,
-    mode,
-    compareModelsProp: compareModelsProp?.length,
-    laneInitialMessagesCount: laneInitialMessages?.length,
-  })
-  
-  console.log('[ChatPanel] allModels details:', allModels?.map(m => ({ id: m.id, name: m.name })))
-  
   const [currentModel, setCurrentModel] = useState(initialModel)
   const [conversationId, setConversationId] = useState(initialConversationId)
   const conversationStyleOffset = useChatStore(state => state.conversationStyleOffset)
@@ -223,6 +210,8 @@ export function ChatPanel({
   }, [])
   const conversationIdRef = useRef(initialConversationId)
   const attachmentsRef = useRef<Attachment[] | undefined>(undefined)
+  // 消息区滚动容器(供 OutlineSidebar 做 scroll-spy / 平滑滚动)
+  const [messagesScrollEl, setMessagesScrollEl] = useState<HTMLDivElement | null>(null)
   const { setCurrentConversationId, setConversationTitle, bumpConversationVersion } = useChatStore()
 
   // Notify store of current conversation (triggers Sidebar to refresh conversation list)
@@ -484,33 +473,45 @@ export function ChatPanel({
       )}
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
-        <MessageList
-          messages={messages}
-          isStreaming={isLoading}
-          className="min-h-full"
-          onRegenerate={handleRegenerate}
-          onEditMessage={handleEditMessage}
-        />
+      <div
+        ref={setMessagesScrollEl}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+      >
+        <div className="flex min-h-full">
+          <MessageList
+            messages={messages}
+            isStreaming={isLoading}
+            className="min-h-full flex-1"
+            onRegenerate={handleRegenerate}
+            onEditMessage={handleEditMessage}
+            models={mergedModels}
+            selectedModel={currentModel}
+            onModelChange={handleModelChange}
+            onSend={handleSend}
+          />
+          <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
+        </div>
       </div>
 
-      {/* Input area - fixed at bottom */}
-      <ChatInput
-        onSend={handleSend}
-        onStop={handleStop}
-        isLoading={isLoading}
-        models={mergedModels}
-        selectedModel={currentModel}
-        onModelChange={handleModelChange}
-        deepThink={deepThink}
-        onDeepThinkChange={handleDeepThinkChange}
-        webSearch={webSearch}
-        onWebSearchChange={handleWebSearchChange}
-        webSearchAvailable={webSearchAvailable}
-        compareMode={false}
-        compareModeAvailable={!conversationId}
-        onCompareModeChange={handleCompareModeChange}
-      />
+      {/* Input area - fixed at bottom (空状态时隐藏,改由 MessageList 中央的输入框接管) */}
+      {messages.length > 0 && (
+        <ChatInput
+          onSend={handleSend}
+          onStop={handleStop}
+          isLoading={isLoading}
+          models={mergedModels}
+          selectedModel={currentModel}
+          onModelChange={handleModelChange}
+          deepThink={deepThink}
+          onDeepThinkChange={handleDeepThinkChange}
+          webSearch={webSearch}
+          onWebSearchChange={handleWebSearchChange}
+          webSearchAvailable={webSearchAvailable}
+          compareMode={false}
+          compareModeAvailable={!conversationId}
+          onCompareModeChange={handleCompareModeChange}
+        />
+      )}
 
       {/* Right preview panel (desktop) */}
       {previewCode && !isPreviewFullscreen && (

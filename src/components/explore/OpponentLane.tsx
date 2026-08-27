@@ -26,7 +26,14 @@ export function OpponentLane({ messages, isLoading, onFactCheck }: OpponentLaneP
           {isLoading && <Loader2 className="w-3 h-3 animate-spin" />}
         </div>
 
-        <div className="space-y-3">
+        {/* 最新消息在上: 使用 flex-col-reverse + 自定义插入顺序的 loading 提示 */}
+        <div className="flex flex-col-reverse space-y-3 space-y-reverse">
+          {isLoading && (
+            <div className="flex items-center gap-2 text-sm text-content-muted order-last">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>对手正在思考...</span>
+            </div>
+          )}
           {messages.map((msg) => (
             <OpponentMessageCard
               key={msg.id}
@@ -34,17 +41,9 @@ export function OpponentLane({ messages, isLoading, onFactCheck }: OpponentLaneP
               onFactCheck={onFactCheck}
             />
           ))}
-
           {messages.length === 0 && !isLoading && (
             <div className="text-sm text-content-muted text-center py-4">
               等待对手发言...
-            </div>
-          )}
-
-          {isLoading && messages.length > 0 && (
-            <div className="flex items-center gap-2 text-sm text-content-muted">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>对手正在思考...</span>
             </div>
           )}
         </div>

@@ -193,7 +193,10 @@ export function MessageBubble({
   }
 
   return (
-    <div className={cn('flex gap-2.5 px-4 py-2', isUser ? 'justify-end' : 'justify-start')}>
+    <div
+      data-message-id={message.id}
+      className={cn('flex gap-2.5 px-4 py-2', isUser ? 'justify-end' : 'justify-start')}
+    >
       {/* Avatar - only for AI */}
       {!isUser && (
         <div className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center bg-accent text-accent-foreground mt-0.5">
@@ -231,7 +234,7 @@ export function MessageBubble({
             {/* Main response */}
             {displayText ? (
               <div className="relative text-sm text-content-primary leading-relaxed">
-                <MarkdownRenderer content={displayText} />
+                <MarkdownRenderer content={displayText} messageId={message.id} />
                 {showCursor && (
                   <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-content-secondary animate-pulse align-middle" />
                 )}

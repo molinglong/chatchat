@@ -3,40 +3,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import type { ModelDefinition } from '@/lib/ai/types'
+import { PROVIDER_DOT, PROVIDER_NAMES } from '@/lib/ai/provider-meta'
 
-export const PROVIDER_DOT: Record<string, string> = {
-  openai: 'bg-emerald-500',
-  anthropic: 'bg-orange-500',
-  deepseek: 'bg-blue-500',
-  qianwen: 'bg-purple-500',
-  wenxin: 'bg-red-500',
-  google: 'bg-sky-500',
-  mistral: 'bg-amber-500',
-  xai: 'bg-slate-600',
-  groq: 'bg-violet-500',
-  moonshot: 'bg-indigo-500',
-  zhipu: 'bg-cyan-500',
-  doubao: 'bg-teal-500',
-  yi: 'bg-fuchsia-500',
-  custom: 'bg-gray-400',
-}
-
-export const PROVIDER_NAMES: Record<string, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  deepseek: 'DeepSeek',
-  qianwen: '通义千问',
-  wenxin: '文心一言',
-  google: 'Google Gemini',
-  mistral: 'Mistral',
-  xai: 'xAI Grok',
-  groq: 'Groq',
-  moonshot: 'Moonshot (Kimi)',
-  zhipu: '智谱 GLM',
-  doubao: '字节豆包',
-  yi: '零一万物 Yi',
-  custom: '自定义',
-}
+export { PROVIDER_DOT, PROVIDER_NAMES }
 
 interface ModelSelectorProps {
   models: ModelDefinition[]
@@ -56,15 +25,6 @@ export function ModelSelector({
   const [isOpen, setIsOpen] = useState(false)
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(new Set())
   const dropdownRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    fetch('/api/keys')
-      .then((r) => r.json())
-      .then((keys: { provider: string }[]) => {
-        setConfiguredProviders(new Set(keys.map((k) => k.provider)))
-      })
-      .catch(() => {})
-  }, [])
 
   useEffect(() => {
     if (!isOpen) return

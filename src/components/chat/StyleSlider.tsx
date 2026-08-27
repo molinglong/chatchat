@@ -60,7 +60,7 @@ export function StyleSlider({
         </div>
         
         {/* Slider track with gradient */}
-        <div className="relative h-2 bg-surface-muted rounded-full">
+        <div className="relative h-2 bg-content-muted/30 rounded-full">
           {/* Gradient overlay based on value */}
           <div
             className="absolute h-full rounded-full transition-all"

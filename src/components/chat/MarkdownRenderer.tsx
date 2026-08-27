@@ -6,8 +6,11 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
+import type { Plugin } from 'unified'
+import type { Root, Element, Text } from 'hast'
 import { CodeBlock } from './CodeBlock'
 import { cn } from '@/lib/utils'
+import { slugify } from '@/lib/outline'
 
 const MermaidBlock = dynamic(() => import('./MermaidBlock').then(m => m.MermaidBlock), { ssr: false })
 const ChartBlock = dynamic(() => import('./ChartBlock').then(m => m.ChartBlock), { ssr: false })
@@ -16,6 +19,48 @@ import type { Components } from 'react-markdown'
 interface MarkdownRendererProps {
   content: string
   className?: string
+  /** 当前消息 id,用于生成稳定且全局唯一的标题 id(配合右侧大纲) */
+  messageId?: string
+}
+
+/**
+ * 给 h1-h3 自动注入稳定 id 的 rehype 插件。
+ * - 与 lib/outline.ts 的 extractHeadings 共用 slugify 规则,
+ *   保证大纲条目的 id 和 DOM id 完全一致。
+ * - 同名标题自动追加 -1/-2 后缀。
+ */
+function rehypeHeadingIds(messageId: string): Plugin<[], Root> {
+  return () => (tree) => {
+    const counts = new Map<string, number>()
+    visit(tree, 'element', (node: Element) => {
+      if (!['h1', 'h2', 'h3'].includes(node.tagName)) return
+      const text = collectText(node).trim()
+      if (!text) return
+      const base = slugify(text)
+      const n = counts.get(base) ?? 0
+      counts.set(base, n + 1)
+      const id = n === 0 ? base : `${base}-${n}`
+      node.properties = node.properties || {}
+      node.properties.id = `${messageId}-${id}`
+    })
+  }
+}
+
+function visit(node: Root | Element | Text, type: string, cb: (n: Element) => void) {
+  if ('children' in node) {
+    for (const child of node.children) {
+      if (child.type === type) cb(child as Element)
+      if ('children' in child) visit(child as Root | Element, type, cb)
+    }
+  }
+}
+
+function collectText(node: Element | Root | Text): string {
+  if ('value' in node && typeof node.value === 'string') return node.value
+  if ('children' in node) {
+    return node.children.map((c) => collectText(c as Element | Text)).join('')
+  }
+  return ''
 }
 
 const components: Components = {
@@ -156,14 +201,14 @@ const components: Components = {
       </p>
     )
   },
-  h1({ children, ...props }) {
-    return <h1 className="text-xl font-bold my-3" {...props}>{children}</h1>
+  h1({ children, id, ...props }) {
+    return <h1 id={id} className="text-xl font-bold my-3 scroll-mt-24" {...props}>{children}</h1>
   },
-  h2({ children, ...props }) {
-    return <h2 className="text-lg font-bold my-3" {...props}>{children}</h2>
+  h2({ children, id, ...props }) {
+    return <h2 id={id} className="text-lg font-bold my-3 scroll-mt-24" {...props}>{children}</h2>
   },
-  h3({ children, ...props }) {
-    return <h3 className="text-base font-bold my-2" {...props}>{children}</h3>
+  h3({ children, id, ...props }) {
+    return <h3 id={id} className="text-base font-bold my-2 scroll-mt-24" {...props}>{children}</h3>
   },
   blockquote({ children, ...props }) {
     return (
@@ -183,13 +228,16 @@ const components: Components = {
 export const MarkdownRenderer = React.memo(function MarkdownRenderer({
   content,
   className,
+  messageId,
 }: MarkdownRendererProps) {
-  // Note: PreviewBlock handles its own preview logic
+  // 没有 messageId 时(几乎不会发生,MessageBubble 总会传),退回到不带 id 的渲染,
+  // 让大纲功能自然降级 — 不会报错。
+  const rehypePlugins = messageId ? [rehypeKatex, rehypeHeadingIds(messageId)] : [rehypeKatex]
   return (
     <div className={cn('prose-sm max-w-none break-words overflow-hidden text-content-primary', className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
         {content}

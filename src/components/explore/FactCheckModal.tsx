@@ -15,6 +15,7 @@ interface FactCheckResult {
   status: 'verified' | 'disputed' | 'unverifiable' | 'false'
   claims: {
     text: string
+    type?: 'fact' | 'value'
     status: 'verified' | 'disputed' | 'unverifiable' | 'false'
     verification?: string
     source?: string
@@ -56,9 +57,9 @@ export function FactCheckModal({ content, role, topic, onClose }: FactCheckModal
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
+      {/* Backdrop — 主题感知磨砂遮罩 */}
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/20 backdrop-blur-[12px] saturate-150 dark:bg-white/15 dark:saturate-150"
         onClick={onClose}
       />
 
@@ -155,14 +156,23 @@ export function FactCheckModal({ content, role, topic, onClose }: FactCheckModal
                       <div className="flex items-start gap-2">
                         <StatusIcon status={claim.status} size="sm" />
                         <div className="flex-1">
-                          <div className="text-xs text-content-primary mb-1">"{claim.text}"</div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="text-xs text-content-primary">"{claim.text}"</div>
+                            {claim.type === 'value' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/10 text-accent">
+                                价值主张
+                              </span>
+                            )}
+                          </div>
                           {claim.verification && (
-                            <div className="text-[11px] text-content-secondary">{claim.verification}</div>
+                            <div className="text-[11px] text-content-secondary whitespace-pre-wrap">
+                              {claim.verification}
+                            </div>
                           )}
                           {claim.source && (
                             <div className="flex items-center gap-1 mt-1 text-[10px] text-content-muted">
                               <Globe className="w-3 h-3" />
-                              <span>{claim.source}</span>
+                              <span className="break-all">{claim.source}</span>
                             </div>
                           )}
                         </div>

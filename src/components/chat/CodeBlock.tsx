@@ -20,7 +20,7 @@ function MacHeader({
   onCopy: () => void
 }) {
   return (
-    <div className="flex items-center justify-between px-4 py-2 bg-code-header border-b border-line">
+    <div className="flex items-center justify-between px-4 py-2 bg-code-header border-b border-line rounded-t-lg">
       {/* Traffic light dots */}
       <div className="flex items-center gap-1.5">
         <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57] border border-[#e0443e]" />
@@ -56,10 +56,10 @@ function PlainCodeBlock({ language, code, className }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
 
   return (
-    <div className={cn('relative group rounded-lg overflow-hidden my-3 border border-line', className)}>
-      <MacHeader 
-        language={language || 'code'} 
-        copied={copied} 
+    <div className={cn('relative group rounded-lg my-3 border border-line [overflow:clip]', className)}>
+      <MacHeader
+        language={language || 'code'}
+        copied={copied}
         onCopy={() => {
           navigator.clipboard.writeText(code).then(() => {
             setCopied(true)
@@ -67,7 +67,7 @@ function PlainCodeBlock({ language, code, className }: CodeBlockProps) {
           })
         }}
       />
-      <pre className="p-4 overflow-x-auto bg-code-bg text-sm leading-relaxed">
+      <pre className="p-4 overflow-x-auto bg-code-bg text-sm leading-relaxed rounded-b-lg">
         <code className="text-content-primary font-mono">{code}</code>
       </pre>
     </div>
@@ -118,14 +118,14 @@ export function CodeBlock({ language, code, className }: CodeBlockProps) {
 
   if (isHighlighted && highlighted) {
     return (
-      <div className={cn('relative group rounded-lg overflow-hidden my-3 border border-line', className)}>
-        <MacHeader 
-          language={language || 'code'} 
-          copied={copied} 
+      <div className={cn('relative group rounded-lg my-3 border border-line [overflow:clip]', className)}>
+        <MacHeader
+          language={language || 'code'}
+          copied={copied}
           onCopy={handleCopy}
         />
         <div
-          className="p-4 overflow-x-auto bg-code-bg text-sm leading-relaxed [&>pre]:!bg-transparent [&>pre]:!m-0 [&>pre]:!p-0"
+          className="p-4 overflow-x-auto bg-code-bg text-sm leading-relaxed rounded-b-lg [&>pre]:!bg-transparent [&>pre]:!m-0 [&>pre]:!p-0"
           dangerouslySetInnerHTML={{ __html: highlighted }}
         />
       </div>

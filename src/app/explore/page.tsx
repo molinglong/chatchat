@@ -10,6 +10,8 @@ import { AssistantPanel } from '@/components/explore/AssistantPanel'
 import { FactCheckModal } from '@/components/explore/FactCheckModal'
 import { TruthSummary } from '@/components/explore/TruthSummary'
 import { ModelSelector } from '@/components/explore/ModelSelector'
+import type { SearchStructured } from '@/components/explore/SearchResults'
+import type { ModelDefinition } from '@/lib/ai/types'
 
 // 辩题类型
 interface Topic {
@@ -97,9 +99,25 @@ const initialState: DebateState = {
 
 export default function ExplorePage() {
   const allModels = getAllModels()
+  const [customModels, setCustomModels] = useState<ModelDefinition[]>([])
   const [userModel, setUserModel] = useState(allModels[0]?.id || 'gpt-4o')
   const [opponentModel, setOpponentModel] = useState(allModels[1]?.id || 'claude-3-5-sonnet')
   const [assistantModel, setAssistantModel] = useState(allModels[0]?.id || 'gpt-4o')
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/custom-models')
+      .then((r) => r.json())
+      .then((custom: ModelDefinition[]) => {
+        if (!cancelled) setCustomModels(custom)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const availableModels = customModels.length > 0
+    ? [...allModels, ...customModels]
+    : allModels
 
   const [state, setState] = useState<DebateState>(initialState)
   const [customTopic, setCustomTopic] = useState('')
@@ -112,14 +130,24 @@ export default function ExplorePage() {
   const [showSummary, setShowSummary] = useState(false)
   const [searchingEvidence, setSearchingEvidence] = useState(false)
   const [evidenceResults, setEvidenceResults] = useState<string | null>(null)
+  const [evidenceStructured, setEvidenceStructured] = useState<SearchStructured | null>(null)
   const [assistantAnalysis, setAssistantAnalysis] = useState<string | null>(null)
 
   const messageListRef = useRef<HTMLDivElement>(null)
 
+  // 消息历史用 ref 持有,避免 callback 依赖 state.userMessages/opponentMessages
+  // (否则每次发消息引用都变,导致 <UserLane> 子树被卸载重建,润色预览/草稿丢失)
+  const stateRef = useRef(state)
+  stateRef.current = state
+
+  // 标记对手请求是否正在进行:防止异常路径下用户连发导致重复请求 + 状态机紊乱
+  const opponentInFlightRef = useRef(false)
+
   // 自动滚动到底部
+  // 列表最新在上: 当新消息加入时, 把 scrollTop 设为 0 滚到顶部
   useEffect(() => {
     if (messageListRef.current) {
-      messageListRef.current.scrollTop = messageListRef.current.scrollHeight
+      messageListRef.current.scrollTop = 0
     }
   }, [state.userMessages, state.opponentMessages])
 
@@ -142,24 +170,30 @@ export default function ExplorePage() {
 
     // 对手发表第一轮观点
     await generateOpponentMessage(topic === 'custom' ? customTopic : topic.title)
-  }, [customTopic])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customTopic, opponentModel])
 
-  // 生成对手发言
+  // 生成对手发言:不依赖 state.userMessages/opponentMessages,改从 stateRef 读取
+  // deps 稳定 → handleSelectTopic/handleSendMessage 引用稳定 → UserLane 不被重建
   const generateOpponentMessage = useCallback(async (topicTitle: string) => {
+    // 防止重复请求:同一时刻只允许一个对手发言请求
+    if (opponentInFlightRef.current) return
+    opponentInFlightRef.current = true
     setState(prev => ({ ...prev, status: 'opponent_turn' }))
 
     try {
+      const snapshot = stateRef.current
       const res = await fetch('/api/explore/opponent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           topic: topicTitle,
           model: opponentModel,
-          conversationHistory: state.userMessages.map(m => ({
+          conversationHistory: snapshot.userMessages.map(m => ({
             role: 'user',
             content: m.content,
           })),
-          opponentHistory: state.opponentMessages.map(m => ({
+          opponentHistory: snapshot.opponentMessages.map(m => ({
             role: 'assistant',
             content: m.content,
           })),
@@ -183,11 +217,16 @@ export default function ExplorePage() {
       }))
     } catch (err) {
       console.error('Failed to generate opponent message:', err)
-      setState(prev => ({ ...prev, status: 'user_turn' }))
+      // 失败时切回 user_turn,让用户能重发或换模型
+      setState(prev =>
+        prev.status === 'opponent_turn' ? { ...prev, status: 'user_turn' } : prev
+      )
+    } finally {
+      opponentInFlightRef.current = false
     }
-  }, [opponentModel, state.userMessages, state.opponentMessages])
+  }, [opponentModel])
 
-  // 用户发送消息
+  // 用户发送消息:同样从 stateRef 读取 topic,deps 只保留 generateOpponentMessage
   const handleSendMessage = useCallback(async (content: string) => {
     const userMsg: Message = {
       id: `user-${Date.now()}`,
@@ -205,16 +244,19 @@ export default function ExplorePage() {
     // 清空助手分析
     setAssistantAnalysis(null)
     setEvidenceResults(null)
+    setEvidenceStructured(null)
 
-    // 对手回应
-    await generateOpponentMessage(state.topic?.title || '')
-  }, [generateOpponentMessage, state.topic])
+    // 对手回应:传最新 topic(避免用 ref 拿到闭包旧值)
+    const topicTitle = stateRef.current.topic?.title || ''
+    await generateOpponentMessage(topicTitle)
+  }, [generateOpponentMessage])
 
   // 搜索论据
   const handleSearchEvidence = useCallback(async (query: string) => {
     if (!query.trim()) return
     setSearchingEvidence(true)
     setEvidenceResults(null)
+    setEvidenceStructured(null)
 
     try {
       const res = await fetch('/api/explore/search', {
@@ -223,13 +265,15 @@ export default function ExplorePage() {
         body: JSON.stringify({ query }),
       })
 
-      if (!res.ok) throw new Error('搜索失败')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '搜索失败')
 
-      const data = await res.json()
-      setEvidenceResults(data.results)
+      setEvidenceStructured(data.structured ?? null)
+      setEvidenceResults(data.results ?? null)
     } catch (err) {
       console.error('Failed to search evidence:', err)
-      setEvidenceResults('搜索失败，请稍后重试')
+      setEvidenceStructured(null)
+      setEvidenceResults('搜索失败：' + (err instanceof Error ? err.message : '请稍后重试'))
     } finally {
       setSearchingEvidence(false)
     }
@@ -255,13 +299,13 @@ export default function ExplorePage() {
         }),
       })
 
-      if (!res.ok) throw new Error('分析失败')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '分析失败')
 
-      const data = await res.json()
       setAssistantAnalysis(data.analysis)
     } catch (err) {
       console.error('Failed to analyze:', err)
-      setAssistantAnalysis('分析失败，请稍后重试')
+      setAssistantAnalysis('分析失败：' + (err instanceof Error ? err.message : '请稍后重试'))
     }
   }, [assistantModel, state.topic, state.opponentMessages, state.userMessages])
 
@@ -283,15 +327,52 @@ export default function ExplorePage() {
         }),
       })
 
-      if (!res.ok) throw new Error('润色失败')
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '润色失败')
 
-      const data = await res.json()
       return data.polished
     } catch (err) {
       console.error('Failed to polish:', err)
       return content
     }
   }, [assistantModel, state.topic])
+
+  // 草稿润色（输入框内）: 调用助手API的 polish 类型, 结果自动填回输入框
+  const [draftPolished, setDraftPolished] = useState<string | null>(null)
+  const [isDraftPolishing, setIsDraftPolishing] = useState(false)
+
+  const handleDraftPolish = useCallback(async (content: string): Promise<string> => {
+    setIsDraftPolishing(true)
+    try {
+      const res = await fetch('/api/explore/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'polish',
+          content,
+          topic: state.topic?.title,
+          model: assistantModel,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '润色失败')
+      const polished = (data.analysis || '').trim()
+      if (polished && polished !== content) {
+        setDraftPolished(polished)
+      }
+      return polished || content
+    } catch (err) {
+      console.error('Draft polish failed:', err)
+      return content
+    } finally {
+      setIsDraftPolishing(false)
+    }
+  }, [assistantModel, state.topic])
+
+  const handleDraftFactCheck = useCallback((content: string) => {
+    // 用事实核查 modal, role=user 表示是用户自己的草稿
+    setFactCheckTarget({ content, role: 'user', messageId: '__draft__' })
+  }, [])
 
   // 结束辩论
   const handleFinishDebate = useCallback(() => {
@@ -307,6 +388,7 @@ export default function ExplorePage() {
     setFactCheckTarget(null)
     setAssistantAnalysis(null)
     setEvidenceResults(null)
+    setEvidenceStructured(null)
   }, [])
 
   // 新辩题
@@ -334,7 +416,7 @@ export default function ExplorePage() {
               <div>
                 <label className="text-[11px] text-content-secondary mb-1 block">你的模型</label>
                 <ModelSelector
-                  models={allModels}
+                  models={availableModels}
                   value={userModel}
                   onChange={setUserModel}
                 />
@@ -342,7 +424,7 @@ export default function ExplorePage() {
               <div>
                 <label className="text-[11px] text-content-secondary mb-1 block">对手模型</label>
                 <ModelSelector
-                  models={allModels}
+                  models={availableModels}
                   value={opponentModel}
                   onChange={setOpponentModel}
                 />
@@ -350,7 +432,7 @@ export default function ExplorePage() {
               <div className="col-span-2">
                 <label className="text-[11px] text-content-secondary mb-1 block">助手模型</label>
                 <ModelSelector
-                  models={allModels}
+                  models={availableModels}
                   value={assistantModel}
                   onChange={setAssistantModel}
                 />
@@ -480,7 +562,7 @@ export default function ExplorePage() {
         <div className="flex items-center gap-1.5">
           <span className="text-content-muted">你的模型:</span>
           <ModelSelector
-            models={allModels}
+            models={availableModels}
             value={userModel}
             onChange={setUserModel}
             compact
@@ -489,7 +571,7 @@ export default function ExplorePage() {
         <div className="flex items-center gap-1.5">
           <span className="text-content-muted">对手模型:</span>
           <ModelSelector
-            models={allModels}
+            models={availableModels}
             value={opponentModel}
             onChange={setOpponentModel}
             compact
@@ -498,7 +580,7 @@ export default function ExplorePage() {
         <div className="flex items-center gap-1.5">
           <span className="text-content-muted">助手模型:</span>
           <ModelSelector
-            models={allModels}
+            models={availableModels}
             value={assistantModel}
             onChange={setAssistantModel}
             compact
@@ -531,6 +613,11 @@ export default function ExplorePage() {
             onFactCheck={(content, id) => handleFactCheck(content, 'user', id)}
             disabled={state.status !== 'user_turn'}
             isPolishing={false}
+            onDraftPolish={handleDraftPolish}
+            onDraftFactCheck={handleDraftFactCheck}
+            isDraftPolishing={isDraftPolishing}
+            draftPolished={draftPolished}
+            onDiscardDraftPolished={() => setDraftPolished(null)}
           />
         </div>
 
@@ -544,6 +631,7 @@ export default function ExplorePage() {
           searching={searchingEvidence}
           analysis={assistantAnalysis}
           evidenceResults={evidenceResults}
+          evidenceStructured={evidenceStructured}
         />
       </div>
 

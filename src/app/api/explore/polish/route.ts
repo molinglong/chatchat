@@ -6,6 +6,11 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { decrypt } from '@/lib/crypto'
 import { getProviderForModel, createProviderInstance } from '@/lib/ai/registry'
+import {
+  resolveApiKey,
+  createCustomLanguageModel,
+  type CustomModelRow,
+} from '@/lib/ai/custom-model'
 import { generateText } from 'ai'
 
 export async function POST(request: Request) {
@@ -22,24 +27,51 @@ export async function POST(request: Request) {
     }
 
     const userId = session.user.id
-
-    // 获取模型对应的 API Key
     const model = modelId || 'gpt-4o'
-    const provider = getProviderForModel(model)
 
-    let keyRecord: { encryptedKey: string } | null = null
+    // 1. 内置模型路径
+    const provider = getProviderForModel(model)
+    let aiModel: any
+
     if (provider) {
-      keyRecord = await prisma.apiKey.findUnique({
+      const keyRecord = await prisma.apiKey.findUnique({
         where: { userId_provider: { userId, provider: provider.id } },
       })
-    }
-
-    if (!keyRecord?.encryptedKey || !provider) {
-      // 没有 API Key 时返回原文
+      if (!keyRecord?.encryptedKey) {
+        // 没有 API Key 时返回原文(原行为保持兼容)
+        return NextResponse.json({ polished: content })
+      }
+      const apiKey = decrypt(keyRecord.encryptedKey)
+      const aiProvider = createProviderInstance(model, apiKey)
+      aiModel = aiProvider(model)
+    } else if (model.startsWith('custom:')) {
+      // 2. 自定义模型路径
+      const customId = model.slice('custom:'.length)
+      const cm = await prisma.customModel.findFirst({
+        where: { id: customId, userId },
+      })
+      if (!cm) {
+        return NextResponse.json({ polished: content })
+      }
+      const row: CustomModelRow = {
+        id: cm.id,
+        userId: cm.userId,
+        name: cm.name,
+        modelId: cm.modelId,
+        baseURL: cm.baseURL,
+        protocol: cm.protocol,
+        apiKey: cm.apiKey,
+        keyProvider: cm.keyProvider,
+        contextWindow: cm.contextWindow,
+        supportsVision: cm.supportsVision,
+        supportsFiles: cm.supportsFiles,
+        supportsReasoning: cm.supportsReasoning,
+      }
+      const apiKey = await resolveApiKey(userId, row)
+      aiModel = createCustomLanguageModel(row, apiKey)
+    } else {
       return NextResponse.json({ polished: content })
     }
-
-    const apiKey = decrypt(keyRecord.encryptedKey)
 
     const systemPrompt = `你是一位写作润色专家，负责帮助用户优化辩论发言。
 请在保持原意的基础上，让文字更加：
@@ -52,9 +84,8 @@ export async function POST(request: Request) {
 
     const userPrompt = topic ? `辩论主题：${topic}\n\n原文：\n${content}` : `原文：\n${content}`
 
-    const aiProvider = createProviderInstance(model, apiKey)
     const result = await generateText({
-      model: aiProvider(model),
+      model: aiModel,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     })

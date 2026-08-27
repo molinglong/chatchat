@@ -7,7 +7,12 @@
     "dev:full": "Remove-Item -Path .next, .cache -Recurse -Force -ErrorAction SilentlyContinue; next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "db:studio": "prisma studio",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:reset": "prisma migrate reset",
+    "db:backup": "powershell -ExecutionPolicy Bypass -File scripts/backup-postgres.ps1"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.41",
@@ -16,8 +21,7 @@
     "@ai-sdk/openai": "^4.0.46",
     "@ai-sdk/react": "^4.0.80",
     "@auth/prisma-adapter": "^2.11.3",
-    "@libsql/client": "^0.17.4",
-    "@prisma/adapter-libsql": "^7.9.1",
+    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.9.1",
     "@types/recharts": "^1.8.29",
     "ai": "^7.0.77",
@@ -31,6 +35,7 @@
     "nanoid": "^6.0.1",
     "next": "14.2.35",
     "next-auth": "^5.0.0-beta.32",
+    "pg": "^8.23.0",
     "prisma": "^7.9.1",
     "react": "^18",
     "react-dom": "^18",

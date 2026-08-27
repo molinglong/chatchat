@@ -19,6 +19,16 @@ interface UserLaneProps {
   onFactCheck: (content: string, id: string) => void
   disabled: boolean
   isPolishing: boolean
+  /** 当前输入框内容发生变化时调用, 用于触发"对草稿润色" */
+  onDraftPolish?: (content: string) => Promise<string>
+  /** 对当前输入框内容做事实核查 */
+  onDraftFactCheck?: (content: string) => void
+  /** 草稿润色中 */
+  isDraftPolishing?: boolean
+  /** 草稿润色结果 */
+  draftPolished?: string | null
+  /** 关闭草稿润色预览 */
+  onDiscardDraftPolished?: () => void
 }
 
 export function UserLane({
@@ -28,6 +38,11 @@ export function UserLane({
   onFactCheck,
   disabled,
   isPolishing,
+  onDraftPolish,
+  onDraftFactCheck,
+  isDraftPolishing = false,
+  draftPolished = null,
+  onDiscardDraftPolished,
 }: UserLaneProps) {
   const [input, setInput] = useState('')
   const [polishingId, setPolishingId] = useState<string | null>(null)
@@ -64,6 +79,20 @@ export function UserLane({
     })
   }
 
+  // 输入框内草稿润色
+  const handleDraftPolish = async () => {
+    if (!input.trim() || !onDraftPolish) return
+    const polished = await onDraftPolish(input.trim())
+    if (polished && polished !== input.trim()) {
+      setInput(polished)
+    }
+  }
+
+  const handleDraftFactCheck = () => {
+    if (!input.trim() || !onDraftFactCheck) return
+    onDraftFactCheck(input.trim())
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -73,33 +102,52 @@ export function UserLane({
 
   return (
     <div className="flex flex-col h-full">
-      {/* 历史消息 */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {messages.map((msg) => (
-          <UserMessageCard
-            key={msg.id}
-            message={msg}
-            onPolish={() => handlePolish(msg)}
-            onFactCheck={() => onFactCheck(msg.content, msg.id)}
-            onApplyPolished={() => handleApplyPolished(msg)}
-            isPolishing={polishingId === msg.id}
-            polished={localPolished[msg.id]}
-          />
-        ))}
+      {/* 历史消息 - 最新在上 */}
+      <div className="flex-1 overflow-y-auto px-4 py-3">
+        <div className="flex flex-col-reverse space-y-3 space-y-reverse">
+          {messages.map((msg) => (
+            <UserMessageCard
+              key={msg.id}
+              message={msg}
+              onPolish={() => handlePolish(msg)}
+              onFactCheck={() => onFactCheck(msg.content, msg.id)}
+              onApplyPolished={() => handleApplyPolished(msg)}
+              isPolishing={polishingId === msg.id}
+              polished={localPolished[msg.id]}
+            />
+          ))}
 
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-content-muted">
-            <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center mb-3">
-              <Sparkles className="w-6 h-6 text-accent" />
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-content-muted">
+              <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center mb-3">
+                <Sparkles className="w-6 h-6 text-accent" />
+              </div>
+              <p className="text-sm">输入你的观点，与对手展开辩论</p>
+              <p className="text-xs mt-1">助手会帮你搜索论据、审查逻辑</p>
             </div>
-            <p className="text-sm">输入你的观点，与对手展开辩论</p>
-            <p className="text-xs mt-1">助手会帮你搜索论据、审查逻辑</p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* 输入框 */}
       <div className="shrink-0 p-4 border-t border-line/60 bg-surface">
+        {/* 草稿润色预览 */}
+        {draftPolished && (
+          <div className="mb-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <div className="flex items-center gap-2 mb-1">
+              <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">润色建议</span>
+              <button
+                onClick={onDiscardDraftPolished}
+                className="ml-auto text-[10px] text-content-muted hover:text-content-secondary"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="text-xs text-content-secondary whitespace-pre-wrap">{draftPolished}</div>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
           <div className="flex-1 relative">
             <textarea
@@ -132,6 +180,42 @@ export function UserLane({
               </button>
             )}
           </div>
+          {/* 草稿润色 */}
+          {onDraftPolish && input.trim() && (
+            <button
+              onClick={handleDraftPolish}
+              disabled={disabled || isDraftPolishing}
+              className={cn(
+                'shrink-0 p-2.5 rounded-xl transition-colors',
+                'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+                'hover:bg-emerald-500/20',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+              title="润色草稿"
+            >
+              {isDraftPolishing ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Sparkles className="w-5 h-5" />
+              )}
+            </button>
+          )}
+          {/* 草稿事实核查 */}
+          {onDraftFactCheck && input.trim() && (
+            <button
+              onClick={handleDraftFactCheck}
+              disabled={disabled}
+              className={cn(
+                'shrink-0 p-2.5 rounded-xl transition-colors',
+                'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+                'hover:bg-amber-500/20',
+                'disabled:opacity-50 disabled:cursor-not-allowed'
+              )}
+              title="事实核查"
+            >
+              <ShieldCheck className="w-5 h-5" />
+            </button>
+          )}
           <button
             onClick={handleSend}
             disabled={!input.trim() || disabled}
@@ -151,7 +235,7 @@ export function UserLane({
         </div>
         <div className="mt-1.5 flex items-center gap-3 text-[10px] text-content-muted">
           <span>Enter 发送 · Shift+Enter 换行</span>
-          <span className="text-content-muted/60">助手会帮你润色、搜索论据</span>
+          <span className="text-content-muted/60">先润色 / 核查，再发送，避免错把论据当观点</span>
         </div>
       </div>
     </div>

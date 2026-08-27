@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { topic, userMessages, opponentMessages } = await request.json()
+    const { topic, userMessages, opponentMessages, model: modelIdInput } = await request.json()
 
     if (!topic?.trim()) {
       return NextResponse.json({ error: 'Topic is required' }, { status: 400 })
@@ -46,19 +46,34 @@ export async function POST(request: Request) {
 
     const userId = session.user.id
 
-    // 获取默认模型
-    const modelId = 'gpt-4o'
-    const provider = getProviderForModel(modelId)
+    // 选择可用的内置模型: 优先用户传入, 否则按用户已配置 key 的优先级兜底
+    const candidates = modelIdInput ? [modelIdInput, 'gpt-4o', 'claude-3-5-sonnet', 'deepseek-chat'] : [
+      'gpt-4o',
+      'claude-3-5-sonnet',
+      'deepseek-chat',
+      'gemini-1.5-pro',
+    ]
 
+    let chosenModelId: string | null = null
     let keyRecord: { encryptedKey: string } | null = null
-    if (provider) {
-      keyRecord = await prisma.apiKey.findUnique({
+    for (const id of candidates) {
+      const provider = getProviderForModel(id)
+      if (!provider) continue
+      const rec = await prisma.apiKey.findUnique({
         where: { userId_provider: { userId, provider: provider.id } },
       })
+      if (rec?.encryptedKey) {
+        chosenModelId = id
+        keyRecord = rec
+        break
+      }
     }
 
-    if (!keyRecord?.encryptedKey || !provider) {
-      return NextResponse.json({ error: 'No API key available' }, { status: 401 })
+    if (!chosenModelId || !keyRecord) {
+      return NextResponse.json(
+        { error: '未配置任何可用的服务商 API Key，请先在设置中添加' },
+        { status: 400 }
+      )
     }
 
     const apiKey = decrypt(keyRecord.encryptedKey)
@@ -114,9 +129,9 @@ export async function POST(request: Request) {
 
 ${historyText.join('\n\n')}`
 
-    const aiProvider = createProviderInstance(modelId, apiKey)
+    const aiProvider = createProviderInstance(chosenModelId, apiKey)
     const result = await generateText({
-      model: aiProvider(modelId),
+      model: aiProvider(chosenModelId),
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     })
