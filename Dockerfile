@@ -52,10 +52,7 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-
-# Prisma 7 driver adapter 用 generated client,保留整个 generated 目录
+# Prisma Client 已由 builder 阶段 generate 到 src/generated/prisma/
 COPY --from=builder --chown=nextjs:nodejs /app/src/generated ./src/generated
 
 # 上传目录(运行时挂载,这里只创建占位)
