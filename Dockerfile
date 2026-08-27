@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# 经典 Dockerfile,不使用 BuildKit 前缀(VPS 已关闭 buildkit)
 
 # ---------- deps ----------
 FROM node:20-bookworm-slim AS deps
