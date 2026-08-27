@@ -123,10 +123,14 @@ cmd_init() {
   "${DC[@]}" up -d nginx
 
   log "2) ?? Let's Encrypt ??..."
-  "${DC[@]}" run --rm certbot certonly \
-    --webroot --webroot-path /var/www/certbot \
-    --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email \
-    -d "$DOMAIN"
+  # ?? docker run ?? certbot,??? compose (compose run --rm + entrypoint ??)
+  docker run --rm \
+    -v aichatt_certbot_conf:/etc/letsencrypt \
+    -v aichatt_certbot_www:/var/www/certbot:rw \
+    certbot/certbot certonly \
+      --webroot --webroot-path /var/www/certbot \
+      --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email \
+      -d "$DOMAIN"
 
   log "3) ? HTTPS ??..."
   apply_https_config
@@ -135,7 +139,8 @@ cmd_init() {
   "${DC[@]}" up -d --build
 
   log "5) ???????..."
-  "${DC[@]}" exec -T app npx prisma migrate deploy
+  # ????? root ?(?? nextjs ????? HOME ? EACCES)
+  "${DC[@]}" exec -T -u root app sh -c "cd /app && npx prisma migrate deploy"
 
   apply_uploads_dir
 
@@ -151,7 +156,7 @@ cmd_up() {
   log "?????????..."
   "${DC[@]}" up -d --build
   log "???????..."
-  "${DC[@]}" exec -T app npx prisma migrate deploy
+  "${DC[@]}" exec -T -u root app sh -c "cd /app && npx prisma migrate deploy"
   "${DC[@]}" exec nginx nginx -s reload 2>/dev/null || true
   ok "?????"
   "${DC[@]}" ps
