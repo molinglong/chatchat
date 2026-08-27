@@ -53,6 +53,13 @@ export POSTGRES_DB="${POSTGRES_DB:-aichatt}"
 export COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 export COMPOSE_PROJECT_NAME=aichatt
 
+# VPS ??????,daemon.json ??? BuildKit,
+# ? docker compose ???????,??
+# "open /var/lib/docker/buildkit/executor: no such file or directory"?
+# ????? builder(???)?
+export DOCKER_BUILDKIT=0
+export COMPOSE_DOCKER_CLI_BUILD=0
+
 # docker compose ???? .env;???????? .env.production,????
 DC=(docker compose --env-file "$ENV_FILE")
 
@@ -178,6 +185,8 @@ cmd_update() {
   log "??????..."
   git fetch origin
   git reset --hard origin/main
+  # ????????(Windows git ???)
+  chmod +x "$SCRIPT_DIR/deploy.sh" 2>/dev/null || true
   log "????..."
   cmd_up
 }
@@ -199,7 +208,10 @@ cmd_ps() {
   "${DC[@]}" ps
 }
 
-# ---------- ?? ----------
+# ---------- entrypoint ----------
+# Auto chmod (Windows git ??? +x)
+chmod +x "$0" 2>/dev/null || true
+
 CMD="${1:-}"
 shift || true
 case "$CMD" in
