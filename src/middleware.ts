@@ -24,7 +24,9 @@ export async function middleware(req: NextRequest) {
     pathname.startsWith("/register") ||
     pathname === "/api/auth" ||
     pathname.startsWith("/api/auth/") ||
-    pathname === "/test-toast"
+    pathname === "/test-toast" ||
+    // 开发期错误捕手上报端点(ErrorSink 专用; 生产环境该路由返回 404)
+    (process.env.NODE_ENV !== "production" && pathname === "/api/debug-log")
 
   if (isPublic) {
     // Keep auth pages reachable so a stale JWT after a database restore can be replaced.

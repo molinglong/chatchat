@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { Providers } from "@/components/Providers";
+import { ErrorSink } from "@/components/debug/ErrorSink";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 
@@ -102,6 +103,7 @@ export default function RootLayout({
         className={`${pingfang.variable} ${geistMono.variable} font-sans antialiased bg-background text-foreground`}
       >
         <Providers>
+          <ErrorSink />
           {/* Tauri/Web 双端统一结构:不再渲染自定义标题栏,浏览器/原生窗口各自负责头部控件 */}
           <div className="flex h-screen flex-col overflow-hidden">
             <div className="flex-1 overflow-hidden">{children}</div>
