@@ -12,7 +12,12 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "db:backup": "powershell -ExecutionPolicy Bypass -File scripts/backup-postgres.ps1"
+    "db:backup": "powershell -ExecutionPolicy Bypass -File scripts/backup-postgres.ps1",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.conf.json",
+    "tauri:build": "tauri build --config src-tauri/tauri.conf.json",
+    "desktop:dev": "tauri dev --config src-tauri/tauri.conf.json",
+    "desktop:build:web": "next build --config next.config.desktop.mjs",
+    "desktop:placeholder": "echo 'Using placeholder. See src-tauri/README.md for static-export build pipeline.'"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.41",
@@ -23,11 +28,15 @@
     "@auth/prisma-adapter": "^2.11.3",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.9.1",
+    "@tanstack/react-query": "^5.102.8",
     "@types/recharts": "^1.8.29",
     "ai": "^7.0.77",
-    "bcryptjs": "^3.0.3",
+    "bcryptjs": "^2.4.3",
     "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
+    "function-plot": "^1.25.4",
+    "html2canvas": "^1.4.1",
+    "izitoast": "^1.4.0",
     "katex": "^0.18.4",
     "lucide-react": "^1.33.0",
     "mermaid": "^11.17.0",
@@ -50,6 +59,8 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^18",

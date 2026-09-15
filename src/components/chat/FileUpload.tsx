@@ -205,7 +205,7 @@ export function FileUpload({
                     onClick={() => handleRemove(idx)}
                     className={cn(
                       'shrink-0 p-0.5 rounded-md transition-colors',
-                      'opacity-0 group-hover:opacity-100',
+                      'opacity-0 show-on-touch group-hover:opacity-100',
                       'hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-500'
                     )}
                     aria-label="移除文件"

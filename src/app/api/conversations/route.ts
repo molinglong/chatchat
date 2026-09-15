@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+import { STYLE_PRESETS } from '@/lib/ai/style-presets'
 
 export async function GET(req: Request) {
   const session = await auth()
@@ -16,9 +17,30 @@ export async function GET(req: Request) {
   const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0
   const q = (searchParams.get('q') ?? '').trim()
 
+  // 搜索范围:
+  //   ?q=关键词 不为空时,匹配标题(title)或任意一条消息的内容(content);
+  //   标题匹配优先,消息匹配次之。两者均使用 case-insensitive 搜索,
+  //   并依靠 Message.content 上的 pg_trgm GIN 索引(见对应迁移)加速。
+  //   ?type=title 仅按标题过滤(供"仅标题"模式备用)。
+  const type = (searchParams.get('type') ?? '').trim().toLowerCase()
   const where = {
     userId: session.user.id,
-    ...(q ? { title: { contains: q } } : {}),
+    ...(q
+      ? type === 'title'
+        ? { title: { contains: q, mode: 'insensitive' as const } }
+        : {
+            OR: [
+              { title: { contains: q, mode: 'insensitive' as const } },
+              {
+                messages: {
+                  some: {
+                    content: { contains: q, mode: 'insensitive' as const },
+                  },
+                },
+              },
+            ],
+          }
+      : {}),
   }
 
   const [total, conversations] = await Promise.all([
@@ -73,6 +95,7 @@ export async function POST(req: Request) {
         title: body.title || source.title || '新对话',
         model: targetModel,
         styleOffset: source.styleOffset,
+        stylePreset: source.stylePreset, // 克隆时一并继承 preset(可能为 null,表示走 balanced)
         messages: {
           create: cloneMessages.map((m) => ({
             role: m.role,
@@ -89,15 +112,21 @@ export async function POST(req: Request) {
     return NextResponse.json(conversation, { status: 201 })
   }
 
+  // 校验 stylePreset(必须为合法 preset id,否则置 null)
+  const validPreset = STYLE_PRESETS.find((p) => p.id === body.stylePreset)?.id ?? null
+  // styleOffset 仍接受但仅作为 preset 推导的兜底
+  const legacyOffset =
+    typeof body.styleOffset === 'number' && Number.isFinite(body.styleOffset)
+      ? Math.max(0, Math.min(100, Math.round(body.styleOffset)))
+      : 50
+
   const conversation = await prisma.conversation.create({
     data: {
       userId: session.user.id,
       title: body.title || '新对话',
       model: body.model || 'gpt-4o',
-      styleOffset:
-        typeof body.styleOffset === 'number' && Number.isFinite(body.styleOffset)
-          ? Math.max(0, Math.min(100, Math.round(body.styleOffset)))
-          : 50,
+      styleOffset: legacyOffset,
+      stylePreset: validPreset, // 新版 preset(优先);null 时应用层回退到 balanced
       ...(body.mode === 'compare' ? { mode: 'compare' } : {}),
       ...(body.compareModels ? { compareModels: JSON.stringify(body.compareModels) } : {}),
     },

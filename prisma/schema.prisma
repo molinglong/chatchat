@@ -24,6 +24,8 @@ model User {
   customModels  CustomModel[]
   generatedImages GeneratedImage[]
   searchApiKeys  SearchApiKey[]
+  courses       Course[]
+  providerModelOverrides ProviderModelOverride[]
   memoryEnabled Boolean   @default(true)
   clarifyEnabled Boolean  @default(true)
   imageModel    String   @default("builtin:wanx2.1-t2i-turbo")
@@ -87,13 +89,38 @@ model Conversation {
   mode          String   @default("single") // single | compare
   compareModels String?  // JSON 数组,如 ["gpt-4o","claude-sonnet"]
   styleOffset   Int      @default(50)
+  stylePreset   String?  // 新版风格预设:id 来自 STYLE_PRESETS(balanced/practical/dev/editor/mentor/scholar). 为 null 时视为 balanced
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages Message[]
+  user       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages   Message[]
+  summaries  ConversationSummary[]
 
   @@index([userId, updatedAt])
+}
+
+// 会话级"远期摘要": 当对话历史接近模型上下文窗口时,
+// 把较早的若干轮消息压缩为一段摘要存到这里,后续请求把它作为
+// 一条 system 注入,代替被压缩的原文,防止长对话撞窗口失忆。
+// 同一会话可有多个摘要(分代压缩),最新一条代表"当前最早期"。
+model ConversationSummary {
+  id             String   @id @default(cuid())
+  conversationId String
+  // 覆盖范围:从第一条到哪一条消息(以 Message.id 标识)。
+  // rangeStart 可以为空,表示从对话开头;rangeEnd 为该次压缩最后一条消息 id。
+  rangeStart     String?
+  rangeEnd       String   // 该次压缩覆盖的最后一条消息 id
+  content        String   // 摘要文本
+  // 用于回查:压缩时正在使用的模型 id,便于后续按窗口大小决策
+  modelId        String?
+  // 摘要覆盖的原始消息对数(估算),用于调试/统计
+  coveredMessages Int     @default(0)
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
 }
 
 model Message {
@@ -103,6 +130,10 @@ model Message {
   content          String
   reasoning        String?  // AI 思考过程（深度思考 / 推理模型）
   attachments      String?  // JSON string for file URLs
+  // 结构化 UI 提示（JSON 字符串），按 kind 决定前端如何渲染。
+  // 例：{"kind":"branch_summary","version":1,"sourceId":"cuid","sourceTitle":"...","branchedAt":"2026-09-03T..."}
+  // 写入规则：仅后端写入；前端按 kind 分发渲染分支。
+  metadata         String?
   model            String?  // assistant 消息所属模型 id
   groupId          String?  // 同一轮对比共享的分组 id
   promptTokens     Int?     // 本轮输入 token 数（assistant 消息）
@@ -116,13 +147,14 @@ model Message {
 }
 
 model Memory {
-  id        String   @id @default(cuid())
-  userId    String
-  category  String   @default("general")
-  content   String
-  source    String   @default("auto") // auto 自动提取 | manual 手动添加
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  userId       String
+  category     String   @default("general")
+  content      String
+  source       String   @default("auto") // auto 自动提取 | manual 手动添加 | imported 从其他 AI 导入
+  sourceDetail String?  // 导入来源名称，如 "ChatGPT" / "Claude" / "Grok"，仅 source=imported 时使用
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -147,6 +179,34 @@ model ImageModel {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, modelId])
+  @@index([userId])
+}
+
+// 用户预置模型覆盖：管理每个 provider 下内置模型的可见性 + 用户添加的模型 ID
+// 用法：
+//   - isHidden=true 表示「隐藏该预置模型」
+//   - isHidden=false + name 非空 = 「用户为该 provider 新增的模型（复用该 provider 的 Key）」
+model ProviderModelOverride {
+  id          String   @id @default(cuid())
+  userId      String
+  provider    String   // "deepseek" / "openai" / "anthropic" / ...
+  modelId     String   // "deepseek-chat" / "gpt-5" / "claude-sonnet-4-5" / ...
+
+  isHidden    Boolean  @default(false)
+
+  // 仅 isHidden=false 时生效（新增模型必填）
+  name              String
+  contextWindow     Int      @default(32768)
+  supportsVision    Boolean  @default(false)
+  supportsFiles     Boolean  @default(false)
+  supportsReasoning Boolean  @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, modelId])
   @@index([userId])
 }
 
@@ -217,4 +277,54 @@ model SearchApiKey {
 
   @@unique([userId, engine])
   @@index([userId])
+}
+
+// ===================== 教学模式(teach mode) =====================
+// 课程(Course) 与某个 Conversation 一一对应,用于把对话生成的结构化课程
+// (chapters) 持久化下来,便于 CourseProgress 跟踪学习进度,
+// WrongQuestion 收集错题用于间隔重复复习。
+
+model Course {
+  id             String   @id @default(cuid())
+  userId         String
+  title          String
+  sourceFile     String?  // 来源文件名(可选,用于显示)
+  chapters       Json     // 章节列表,结构由前端约定
+  conversationId String?  @unique  // 与生成它的会话一一对应(允许尚未关联会话的课程)
+  createdAt      DateTime @default(now())
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  progress CourseProgress?
+  wrongs   WrongQuestion[]
+
+  @@index([userId])
+}
+
+model CourseProgress {
+  id              String   @id @default(cuid())
+  userId          String
+  courseId        String   @unique
+  currentChapter  Int      @default(0)
+  masteredChapters Json    @default("[]")
+  weakPoints      Json     @default("[]")
+  updatedAt       DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+}
+
+model WrongQuestion {
+  id            String   @id @default(cuid())
+  userId        String
+  courseId      String
+  chapterIdx    Int
+  question      String
+  userAnswer    String
+  correctAnswer String
+  explanation   String
+  resolved      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([userId, courseId, resolved])
 }

@@ -1,11 +1,13 @@
 'use client'
 
-import { useState, useRef, useEffect, KeyboardEvent } from 'react'
+import { useState, useRef, useEffect, KeyboardEvent, memo } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Trash2, Pencil, Check, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useChatStore } from '@/store/chat-store'
+import { useSingleFlight } from '@/hooks/useSingleFlight'
+import { isUnread } from '@/lib/last-read'
 
 interface ConversationItemProps {
   id: string
@@ -13,6 +15,8 @@ interface ConversationItemProps {
   mode?: string
   /** 列表中的索引,用于逐个淡入的错峰延迟 */
   index?: number
+  /** 该会话最后一条消息时间(ms 数字).来自会话的 updatedAt. */
+  lastMessageAt?: number
   onDelete?: (id: string) => void
   onRename?: (id: string, newTitle: string) => void
 }
@@ -21,13 +25,18 @@ interface ConversationItemProps {
 const STAGGER_STEP_MS = 20
 const STAGGER_MAX_INDEX = 15
 
-export function ConversationItem({ id, title, mode, index = 0, onDelete, onRename }: ConversationItemProps) {
+function ConversationItemInner({ id, title, mode, index = 0, lastMessageAt, onDelete, onRename }: ConversationItemProps) {
   const staggerDelay = Math.min(index, STAGGER_MAX_INDEX) * STAGGER_STEP_MS
   const pathname = usePathname()
-  const { currentConversationId } = useChatStore()
+  const { currentConversationId, lastReadAt } = useChatStore()
   // Fall back to the store because after the first message of a new chat the URL
   // is rewritten via history.replaceState, so usePathname() still returns /chat
   const isActive = pathname === `/chat/c/${id}` || currentConversationId === id
+  // 未读判断:活跃会话不显示蓝点,否则按 lastMessageAt vs lastReadAt
+  const showUnreadDot =
+    !isActive &&
+    typeof lastMessageAt === 'number' &&
+    isUnread(id, lastMessageAt, lastReadAt)
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(title)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -51,6 +60,18 @@ export function ConversationItem({ id, title, mode, index = 0, onDelete, onRenam
     setEditValue(title)
     setIsEditing(true)
   }
+
+  const startEditingDebounced = useSingleFlight(startEditing, [title])
+
+  function handleDelete(e: React.MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (onDelete) {
+      onDelete(id)
+    }
+  }
+
+  const handleDeleteDebounced = useSingleFlight(handleDelete, [id, onDelete])
 
   function cancelEditing() {
     setEditValue(title)
@@ -115,12 +136,21 @@ export function ConversationItem({ id, title, mode, index = 0, onDelete, onRenam
       href={`/chat/c/${id}`}
       style={{ animationDelay: `${staggerDelay}ms` }}
       className={cn(
-        'sidebar-item-enter group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm transition-colors',
+        'sidebar-item-enter group flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm transition-colors',
         isActive
           ? 'bg-accent-soft text-content-primary font-medium'
           : 'text-content-secondary hover:bg-surface-subtle/60 hover:text-content-primary'
       )}
     >
+      {showUnreadDot && (
+        <span
+          aria-label="未读"
+          title="有未读消息"
+          className="shrink-0 w-2 h-2 rounded-full bg-blue-500 dark:bg-blue-400
+            shadow-[0_0_8px_rgba(59,130,246,0.75)] animate-pulse"
+          style={{ animationDuration: '2.4s' }}
+        />
+      )}
       <span className="flex-1 truncate">{title}</span>
       {mode === 'compare' && (
         <span className="shrink-0 text-[9px] px-1 py-0.5 rounded bg-accent-soft text-content-secondary font-medium">
@@ -129,22 +159,20 @@ export function ConversationItem({ id, title, mode, index = 0, onDelete, onRenam
       )}
       {onRename && (
         <button
-          onClick={startEditing}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-surface-subtle hover:text-content-primary transition-opacity"
+          onClick={startEditingDebounced}
+          className="opacity-0 show-on-touch group-hover:opacity-100 p-0.5 rounded-md hover:bg-surface-subtle hover:text-content-primary transition-opacity active:scale-95 touch-manipulation"
           aria-label="重命名"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
         >
           <Pencil className="w-3 h-3" />
         </button>
       )}
       {onDelete && (
         <button
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onDelete(id)
-          }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-surface-subtle hover:text-red-500 dark:hover:text-red-400 transition-opacity"
+          onClick={handleDeleteDebounced}
+          className="opacity-0 show-on-touch group-hover:opacity-100 p-0.5 rounded-md hover:bg-surface-subtle hover:text-red-500 dark:hover:text-red-400 transition-opacity active:scale-95 touch-manipulation"
           aria-label="删除对话"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
         >
           <Trash2 className="w-3 h-3" />
         </button>
@@ -152,3 +180,29 @@ export function ConversationItem({ id, title, mode, index = 0, onDelete, onRenam
     </Link>
   )
 }
+
+/**
+ * 对比函数: id / title / mode / 回调引用相同则跳过重渲
+ * - pathname 在父级触发 ConversationItem 列表重渲时也会变(来自 usePathname),
+ *   但 active 状态是派生,只要父级 currentConversationId 不变即可
+ * - currentConversationId 来自 store,但 memo 不会订阅 store —— 这里只比较自身 props
+ */
+function areConversationItemPropsEqual(
+  prev: Readonly<ConversationItemProps>,
+  next: Readonly<ConversationItemProps>
+): boolean {
+  if (prev.id !== next.id) return false
+  if (prev.title !== next.title) return false
+  if (prev.mode !== next.mode) return false
+  if (prev.index !== next.index) return false
+  if (prev.lastMessageAt !== next.lastMessageAt) return false
+  if (prev.onDelete !== next.onDelete) return false
+  if (prev.onRename !== next.onRename) return false
+  return true
+}
+
+/**
+ * Memoized ConversationItem —— 会话列表 100+ 项时,
+ * 切换一个会话不会让其他 99 项重渲(它们只是 props 引用相同)。
+ */
+export const ConversationItem = memo(ConversationItemInner, areConversationItemPropsEqual)

@@ -43,9 +43,16 @@ export async function POST(req: Request) {
     })
 
     return NextResponse.json({ success: true }, { status: 201 })
-  } catch {
+  } catch (err) {
+    console.error("[auth/register] failed:", err)
+    if (err instanceof Error) {
+      console.error("[auth/register] stack:", err.stack)
+      console.error("[auth/register] message:", err.message)
+      console.error("[auth/register] cause:", (err as Error & { cause?: unknown }).cause)
+    }
+    const message = err instanceof Error ? err.message : "unknown error"
     return NextResponse.json(
-      { error: "服务器错误，请稍后重试" },
+      { error: "服务器错误，请稍后重试", detail: message },
       { status: 500 }
     )
   }

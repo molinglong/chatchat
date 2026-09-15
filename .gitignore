@@ -64,3 +64,14 @@ src/generated/
 # Deploy
 deploy/.env.production
 deploy/backups/
+
+# Dev debug outputs
+tsc-*.out
+*.log
+migrate-status.out
+
+# Tauri build artifacts
+src/disabled/src-tauri/target/
+
+# Agent temp files
+.agents/_tmp/

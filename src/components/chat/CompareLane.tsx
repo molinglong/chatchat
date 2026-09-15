@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
@@ -25,7 +25,7 @@ interface CompareLaneProps {
   initialMessages: UIMessage[]
   conversationIdRef: React.MutableRefObject<string | null>
   groupIdRef: React.MutableRefObject<string>
-  styleOffset: number
+  stylePreset: string
   deepThink: boolean
   /** 联网搜索开关(由 ComparePanel 统一控制,每个泳道都带上) */
   webSearch: boolean
@@ -42,7 +42,7 @@ export function CompareLane({
   initialMessages,
   conversationIdRef,
   groupIdRef,
-  styleOffset,
+  stylePreset,
   deepThink,
   webSearch,
   onConvIdFromHeader,
@@ -54,35 +54,58 @@ export function CompareLane({
   // 第一个泳道把 ref 清掉、后续泳道 fetch 时读到 undefined 的竞态
   const transportAttachmentsRef = useRef<Attachment[] | undefined>(undefined)
 
-  // Create transport with dynamic body getters so values are read at send time
-  const transport = new DefaultChatTransport<UIMessage>({
-    api: '/api/chat',
-    body: {
-      model: modelId,
-      get conversationId() {
-        return conversationIdRef.current
-      },
-      get groupId() {
-        return groupIdRef.current
-      },
-      styleOffset,
-      deepThink,
-      webSearch,
-      get attachments() {
-        return transportAttachmentsRef.current
-      },
-    },
-    // 兜底: 若客户端预创建会话失败,以服务端返回头为准
-    fetch: async (url, options) => {
-      const response = await fetch(url, options)
-      const newConvId = response.headers.get('X-Conversation-Id')
-      const newConvTitle = response.headers.get('X-Conversation-Title')
-      if (newConvId) {
-        onConvIdFromHeader(newConvId, newConvTitle)
-      }
-      return response
-    },
-  })
+  // 用 ref 持有最新的 props,避免 transport body 闭包捕获旧值。
+  // 即使 useChat 内部缓存了 transport,body getter 在请求时才读取,
+  // 也能拿到最新的 stylePreset / deepThink / webSearch。
+  const stylePresetRef = useRef(stylePreset)
+  stylePresetRef.current = stylePreset
+  const deepThinkRef = useRef(deepThink)
+  deepThinkRef.current = deepThink
+  const webSearchRef = useRef(webSearch)
+  webSearchRef.current = webSearch
+
+  // Create transport with dynamic body getters so values are read at send time.
+  // 用 useMemo 收敛创建,避免每次 render 都新建 transport。
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<UIMessage>({
+        api: '/api/chat',
+        body: {
+          model: modelId,
+          get conversationId() {
+            return conversationIdRef.current
+          },
+          get groupId() {
+            return groupIdRef.current
+          },
+          get stylePreset() {
+            return stylePresetRef.current
+          },
+          get deepThink() {
+            return deepThinkRef.current
+          },
+          get webSearch() {
+            return webSearchRef.current
+          },
+          get attachments() {
+            return transportAttachmentsRef.current
+          },
+        },
+        // 兜底: 若客户端预创建会话失败,以服务端返回头为准
+        fetch: async (url, options) => {
+          const response = await fetch(url, options)
+          const newConvId = response.headers.get('X-Conversation-Id')
+          const newConvTitle = response.headers.get('X-Conversation-Title')
+          if (newConvId) {
+            onConvIdFromHeader(newConvId, newConvTitle)
+          }
+          return response
+        },
+      }),
+    // modelId 由父组件按 key 重挂保证不漂移,onConvIdFromHeader 在父组件已 useCallback 稳定,
+    // 其余可变值都通过 ref 读取,transport 仅在挂载时创建一次
+    [modelId, onConvIdFromHeader]
+  )
 
   // Ref to setMessages,避免在 useChat 初始化器内部自引用导致循环依赖
   const setMessagesRef = useRef<((updater: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void) | null>(null)

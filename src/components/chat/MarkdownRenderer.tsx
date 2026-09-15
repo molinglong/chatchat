@@ -1,6 +1,6 @@
 'use client'
 
-import React from 'react'
+import React, { useRef } from 'react'
 import dynamic from 'next/dynamic'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -9,11 +9,14 @@ import rehypeKatex from 'rehype-katex'
 import type { Plugin } from 'unified'
 import type { Root, Element, Text } from 'hast'
 import { CodeBlock } from './CodeBlock'
+import { MathToolbarEnhancer } from './MathToolButton'
 import { cn } from '@/lib/utils'
 import { slugify } from '@/lib/outline'
+import { rehypeKatexEnhance } from '@/lib/math/rehype-katex-enhance'
 
 const MermaidBlock = dynamic(() => import('./MermaidBlock').then(m => m.MermaidBlock), { ssr: false })
 const ChartBlock = dynamic(() => import('./ChartBlock').then(m => m.ChartBlock), { ssr: false })
+const PlotBlock = dynamic(() => import('./PlotBlock').then(m => m.PlotBlock), { ssr: false })
 import type { Components } from 'react-markdown'
 
 interface MarkdownRendererProps {
@@ -82,6 +85,11 @@ const components: Components = {
       // Route chart code blocks to ChartBlock
       if (lang === 'chart') {
         return <ChartBlock code={codeString} />
+      }
+
+      // Route plot code blocks to PlotBlock (函数图像)
+      if (lang === 'plot' || lang === 'function-plot') {
+        return <PlotBlock code={codeString} />
       }
 
       // Route preview code blocks to inline HTML preview
@@ -232,9 +240,19 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
 }: MarkdownRendererProps) {
   // 没有 messageId 时(几乎不会发生,MessageBubble 总会传),退回到不带 id 的渲染,
   // 让大纲功能自然降级 — 不会报错。
-  const rehypePlugins = messageId ? [rehypeKatex, rehypeHeadingIds(messageId)] : [rehypeKatex]
+  // rehypeKatexEnhance 必须在 rehypeKatex 之后,否则找不到 .katex 节点。
+  const rehypePlugins = messageId
+    ? [rehypeKatex, rehypeKatexEnhance, rehypeHeadingIds(messageId)]
+    : [rehypeKatex, rehypeKatexEnhance]
+
+  // 容器 ref 供 MathToolbarEnhancer 监听内部新出现的 .katex 节点
+  const containerRef = useRef<HTMLDivElement>(null)
+
   return (
-    <div className={cn('prose-sm max-w-none break-words overflow-hidden text-content-primary', className)}>
+    <div
+      ref={containerRef}
+      className={cn('prose-sm max-w-none break-words overflow-hidden text-content-primary', className)}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={rehypePlugins}
@@ -242,6 +260,7 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
       >
         {content}
       </ReactMarkdown>
+      <MathToolbarEnhancer rootRef={containerRef} />
     </div>
   )
 })

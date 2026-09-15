@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { decrypt } from '@/lib/crypto'
-import { getProviderForModel, createProviderInstance, getModel } from '@/lib/ai/registry'
+import { getProviderForModel, createProviderInstance, getModel, getEffectiveModel } from '@/lib/ai/registry'
 import { generateText } from 'ai'
 import {
   resolveApiKey,
@@ -30,9 +30,19 @@ export async function POST(request: Request) {
     const model = modelId || 'gpt-4o'
 
     // 1. 内置模型路径
-    const provider = getProviderForModel(model)
+    let provider = getProviderForModel(model)
     let apiKey: string | undefined
     let aiModel: any
+
+    // 1a. 如果内置查不到且不是 custom: 前缀，则尝试匹配用户级覆盖（ProviderModelOverride 表里的新增模型）
+    //     命中后复用其 provider 的内置实例（用同一份 API Key）
+    if (!provider && !model.startsWith('custom:')) {
+      const userLevelModel = await getEffectiveModel(userId, model)
+      if (userLevelModel && userLevelModel.provider !== 'custom') {
+        const { providers: builtinProviders } = await import('@/lib/ai/registry')
+        provider = builtinProviders[userLevelModel.provider]
+      }
+    }
 
     if (provider) {
       const keyRecord = await prisma.apiKey.findUnique({

@@ -9,6 +9,7 @@ import type { Attachment } from './FileUpload'
 import { CompareLane, type LaneApi } from './CompareLane'
 import { ChatInput } from './ChatInput'
 import { PROVIDER_DOT } from './ModelSelector'
+import { toast } from '@/lib/toast'
 
 const COMPARE_MODELS_STORAGE_KEY = 'chat:compareModels'
 
@@ -19,7 +20,7 @@ interface ComparePanelProps {
   /** 初始对比模型(来自 DB 或默认值) */
   initialCompareModels: string[]
   allModels: ModelDefinition[]
-  styleOffset: number
+  stylePreset: string
   deepThink: boolean
   onDeepThinkChange: (enabled: boolean) => void
   /** 联网搜索(对比模式下所有泳道共享一个开关) */
@@ -38,7 +39,7 @@ export function ComparePanel({
   initialLaneMessages,
   initialCompareModels,
   allModels,
-  styleOffset,
+  stylePreset,
   deepThink,
   onDeepThinkChange,
   webSearch,
@@ -113,7 +114,7 @@ export function ComparePanel({
             body: JSON.stringify({
               title: text.slice(0, 40) || '新对话',
               model: compareModelsRef.current[0],
-              styleOffset,
+              stylePreset,
               mode: 'compare',
               compareModels: compareModelsRef.current,
             }),
@@ -141,7 +142,7 @@ export function ComparePanel({
         laneApis.current.get(modelId)?.send(text, attachments)
       }
     },
-    [styleOffset, setCurrentConversationId, setConversationTitle, bumpConversationVersion, onConversationCreated]
+    [stylePreset, setCurrentConversationId, setConversationTitle, bumpConversationVersion, onConversationCreated]
   )
 
   const handleStop = useCallback(() => {
@@ -180,7 +181,7 @@ export function ComparePanel({
       window.location.href = `/chat/c/${convId}`
     } catch (err) {
       console.error('Failed to convert to single chat:', err)
-      alert('转换失败，请重试')
+      toast.error('转换失败，请重试')
       setConverting(false)
     }
   }, [soloModelId])
@@ -201,7 +202,7 @@ export function ComparePanel({
       window.location.href = `/chat/c/${conv.id}`
     } catch (err) {
       console.error('Failed to clone conversation:', err)
-      alert('创建新会话失败，请重试')
+      toast.error('创建新会话失败，请重试')
       setConverting(false)
     }
   }, [soloModelId])
@@ -230,7 +231,7 @@ export function ComparePanel({
                   initialMessages={initialLaneMessages[index] ?? []}
                   conversationIdRef={conversationIdRef}
                   groupIdRef={groupIdRef}
-                  styleOffset={styleOffset}
+                  stylePreset={stylePreset}
                   deepThink={deepThink}
                   webSearch={webSearch}
                   onConvIdFromHeader={handleConvIdFromHeader}

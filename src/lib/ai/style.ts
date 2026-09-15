@@ -1,24 +1,29 @@
 /**
- * AI 对话风格参数配置
+ * AI 对话风格参数配置（新版：preset 驱动）
+ *
+ * 历史背景：早期版本用一个 0-100 的 styleOffset 数字（0=严肃、50=平衡、100=幽默），
+ * 现已升级为 6 个具名预设（balanced/practical/dev/editor/mentor/scholar），具体见
+ * `./style-presets.ts`。下方只保留向后兼容的 legacy 函数，新代码请直接用
+ * `./style-presets` 暴露的 `getStylePromptFromPreset` / `getStylePresetLabel`。
  */
 
 export interface StyleConfig {
-  offset: number; // 0-100 (0=正式严肃，50=平衡中性，100=幽默风趣)
+  offset: number // 0-100 (0=正式严肃，50=平衡中性，100=幽默风趣)—— legacy
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Legacy: 按 0-100 阈值渲染三个分支（保留导出以防外部脚本引用，类型已不推荐）
+// ──────────────────────────────────────────────────────────────────────────────
+
 /**
+ * @deprecated 请改用 `getStylePromptFromPreset`。
  * 根据风格偏移量生成对应的 System Prompt
  * @param offset 风格偏移量 0-100
  */
 export function getStylePrompt(offset: number = 50): string {
   const normalized = Math.max(0, Math.min(100, offset))
-  
-  // 0-30: 偏向正式严肃
-  // 30-70: 平衡中性 (默认 50)
-  // 70-100: 偏向幽默风趣
-  
+
   if (normalized <= 30) {
-    // 正式模式
     return [
       '## 对话风格：正式严肃',
       '以专业、严谨的方式进行对话:',
@@ -30,7 +35,6 @@ export function getStylePrompt(offset: number = 50): string {
       '- 适合工作场景和专业讨论',
     ].join('\n')
   } else if (normalized >= 70) {
-    // 幽默模式
     return [
       '## 对话风格：幽默风趣',
       '让对话轻松有趣，但不失专业性:',
@@ -42,7 +46,6 @@ export function getStylePrompt(offset: number = 50): string {
       '- 但要注意分寸，不降低回答质量',
     ].join('\n')
   } else {
-    // 30-70: 平衡模式 (接近线性插值)
     return [
       '## 对话风格：平衡自然',
       '保持专业友好的对话方式:',
@@ -55,7 +58,8 @@ export function getStylePrompt(offset: number = 50): string {
 }
 
 /**
- * 获取风格的可视化标签
+ * @deprecated 请改用 `getStylePresetLabel`。
+ * 获取风格的可视化标签（用于旧版 slider 显示）
  * @param offset 风格偏移量
  */
 export function getStyleLabel(offset: number = 50): string {
@@ -67,3 +71,18 @@ export function getStyleLabel(offset: number = 50): string {
     return '平衡'
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 新版：preset 驱动（推荐）
+// ──────────────────────────────────────────────────────────────────────────────
+
+export {
+  STYLE_PRESETS,
+  DEFAULT_STYLE_PRESET,
+  getStylePreset,
+  getStylePresetLabel,
+  getStylePromptFromPreset,
+  presetFromOffset,
+  type StylePreset,
+  type StylePresetId,
+} from './style-presets'

@@ -10,6 +10,16 @@ interface ConversationData {
   title: string
   mode?: string
   updatedAt: string
+  // 搜索模式下,由 /api/messages/snippets 注入的"消息级命中"预览
+  matchedFragment?: string | null
+  matchedFragmentRole?: string | null
+}
+
+interface MessageFragment {
+  conversationId: string
+  messageId: string
+  role: string
+  snippet: string
 }
 
 /**
@@ -59,9 +69,11 @@ function groupConversations(items: ConversationData[]) {
 interface SearchDialogProps {
   open: boolean
   onClose: () => void
+  /** 选中一条对话后跳转。Sidebar 用 router.push,其他场景可自定义(如嵌入子页) */
+  onSelect?: (id: string) => void
 }
 
-export function SearchDialog({ open, onClose }: SearchDialogProps) {
+export function SearchDialog({ open, onClose, onSelect }: SearchDialogProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ConversationData[]>([])
   const [loading, setLoading] = useState(false)
@@ -69,6 +81,10 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
   const [hasMore, setHasMore] = useState(true)
   const [total, setTotal] = useState<number | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
+  // 消息级命中片段(由 /api/messages/snippets 注入): conversationId -> fragment
+  const [fragmentsByConv, setFragmentsByConv] = useState<Map<string, MessageFragment>>(
+    new Map()
+  )
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
@@ -87,6 +103,7 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
     } else {
       setQuery('')
       setResults([])
+      setFragmentsByConv(new Map())
       setActiveIndex(0)
       setHasMore(true)
       setTotal(null)
@@ -168,6 +185,48 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
     }
   }, [query, runSearch])
 
+  // 当搜索结果或关键词变化时,拉取消息级命中片段。
+  // 翻页加载也会重新触发,保证新增会话也能拿到片段。
+  useEffect(() => {
+    const trimmed = query.trim()
+    if (!trimmed || results.length === 0) {
+      // 无关键词或无结果:清理片段,避免显示陈旧命中
+      setFragmentsByConv((prev) => (prev.size === 0 ? prev : new Map()))
+      return
+    }
+    const convIds = results.map((r) => r.id).join(',')
+    const controller = new AbortController()
+    let cancelled = false
+    // 短延迟避免搜索主请求抖动期间重复触发
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/messages/snippets?convIds=${encodeURIComponent(convIds)}&q=${encodeURIComponent(trimmed)}`,
+          { signal: controller.signal }
+        )
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        const fragments: MessageFragment[] = Array.isArray(data.fragments)
+          ? data.fragments
+          : []
+        const map = new Map<string, MessageFragment>()
+        for (const f of fragments) {
+          // 一个会话取一条最早的(后端已排序),后到的忽略
+          if (!map.has(f.conversationId)) map.set(f.conversationId, f)
+        }
+        setFragmentsByConv(map)
+      } catch {
+        // 静默失败:片段是"锦上添花",不影响主搜索体验
+      }
+    }, 120)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [results, query])
+
   // 触底加载更多(滚动容器内哨兵元素)
   useEffect(() => {
     if (!open) return
@@ -189,6 +248,7 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
 
   function highlightMatch(text: string, q: string) {
     if (!q.trim()) return text
+    // 不区分大小写地高亮;只标第一个命中(标题/片段通常一次即可)
     const idx = text.toLowerCase().indexOf(q.trim().toLowerCase())
     if (idx === -1) return text
     return (
@@ -202,8 +262,29 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
     )
   }
 
+  // 命中片段的角色徽章(用户/AI),搜索模式下显示
+  function FragmentRoleBadge({ role }: { role: string }) {
+    const isUser = role === 'user'
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center px-1 py-px rounded text-[9px] font-medium tracking-wide uppercase',
+          isUser
+            ? 'bg-accent/15 text-accent'
+            : 'bg-surface-subtle text-content-muted'
+        )}
+      >
+        {isUser ? 'YOU' : 'AI'}
+      </span>
+    )
+  }
+
   function handleSelect(conv: ConversationData) {
     onClose()
+    if (onSelect) {
+      onSelect(conv.id)
+      return
+    }
     router.push(`/chat/c/${conv.id}`)
   }
 
@@ -289,42 +370,61 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
             </div>
           ) : (
             <div className="py-1">
-              {grouped.map((group, gi) => (
-                <div key={group.key} className={cn(gi === 0 ? '' : 'mt-1')}>
-                  {/* 分组标题 —— 搜索时显示"搜索结果",浏览时显示时间分组 */}
-                  <div className="px-3.5 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-content-muted">
-                    {query.trim() ? '搜索结果' : group.key}
-                    <span className="ml-1.5 text-content-muted/70 normal-case tracking-normal">
-                      {group.items.length}
-                    </span>
-                  </div>
+              {grouped.map((group, gi) => {
+                const fragmentHits = query.trim()
+                  ? group.items.filter((c) => fragmentsByConv.has(c.id)).length
+                  : 0
+                return (
+                  <div key={group.key} className={cn(gi === 0 ? '' : 'mt-1')}>
+                    {/* 分组标题 —— 搜索时显示"搜索结果",浏览时显示时间分组 */}
+                    <div className="px-3.5 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-content-muted">
+                      {query.trim() ? '搜索结果' : group.key}
+                      <span className="ml-1.5 text-content-muted/70 normal-case tracking-normal">
+                        {group.items.length}
+                        {query.trim() && fragmentHits > 0 ? ` (${fragmentHits} 条消息命中)` : ''}
+                      </span>
+                    </div>
                   {/* 该分组下的对话 */}
                   <ul className="space-y-0.5 px-1">
                     {group.items.map((conv) => {
                       const flatIdx = flatResults.indexOf(conv)
+                      const fragment = fragmentsByConv.get(conv.id)
                       return (
                         <li key={conv.id}>
                           <button
                             onClick={() => handleSelect(conv)}
                             onMouseEnter={() => setActiveIndex(flatIdx)}
                             className={cn(
-                              'w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors',
+                              'w-full flex items-start gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors',
                               flatIdx === activeIndex
                                 ? 'bg-accent/15 text-content-primary'
                                 : 'text-content-secondary hover:bg-surface-subtle/60'
                             )}
                           >
-                            <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60" />
-                            <span className="text-sm truncate flex-1">
-                              {highlightMatch(conv.title || '新对话', query)}
-                            </span>
+                            <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60 mt-1" />
+                            <div className="flex-1 min-w-0">
+                              {/* 标题行(支持高亮) */}
+                              <div className="text-sm truncate">
+                                {highlightMatch(conv.title || '新对话', query)}
+                              </div>
+                              {/* 消息级命中片段:仅搜索模式下显示,无命中时退化隐藏 */}
+                              {fragment && (
+                                <div className="mt-0.5 flex items-center gap-1.5 min-w-0">
+                                  <FragmentRoleBadge role={fragment.role} />
+                                  <span className="text-[11px] text-content-muted/90 truncate flex-1">
+                                    {highlightMatch(fragment.snippet, query)}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           </button>
                         </li>
                       )
                     })}
                   </ul>
                 </div>
-              ))}
+                )
+              })}
 
               {/* 加载更多哨兵 —— 滚到这里自动请求下一页 */}
               <div ref={sentinelRef} className="h-1" />

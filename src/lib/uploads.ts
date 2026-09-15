@@ -27,15 +27,26 @@ export function sanitizeUploadName(input: string): string | null {
 
 /** 收集全库消息中所有被引用的附件文件名 */
 export async function collectReferencedUploadNames(): Promise<Set<string>> {
-  const rows = await prisma.message.findMany({
-    where: { attachments: { not: null } },
-    select: { attachments: true },
-  })
+  const [msgRows, imgRows] = await Promise.all([
+    prisma.message.findMany({
+      where: { attachments: { not: null } },
+      select: { attachments: true },
+    }),
+    // 生图产物(workspace 工作台 + chat 对话中触发的)也会落盘到 /uploads,
+    // 必须一并扫描,避免被 24h 孤儿清理误删导致历史消息图片裂开
+    prisma.generatedImage.findMany({
+      select: { url: true },
+    }),
+  ])
   const names = new Set<string>()
-  for (const row of rows) {
+  for (const row of msgRows) {
     for (const name of parseAttachmentNames(row.attachments)) {
       names.add(name)
     }
+  }
+  for (const row of imgRows) {
+    const name = sanitizeUploadName(row.url)
+    if (name) names.add(name)
   }
   return names
 }
@@ -57,6 +68,12 @@ export function parseAttachmentNames(attachmentsJson: string | null): string[] {
   } catch {
     return []
   }
+}
+
+/** 解析 GeneratedImage.url(/uploads/xxx.png)得到文件名 */
+export function parseGeneratedImageName(url: string | null | undefined): string | null {
+  if (!url) return null
+  return sanitizeUploadName(url)
 }
 
 /** 删除一条消息 attachments JSON 中引用的全部文件(级联清理用) */

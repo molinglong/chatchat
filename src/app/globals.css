@@ -78,6 +78,22 @@
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
+  /* color-scheme 让浏览器原生 UI(表单控件/滚动条)跟随主题,
+     避免 iOS Safari 在深色模式下出现"白色输入框/滚动条"刺眼 */
+  color-scheme: light dark;
+}
+
+/* Safe-area 变量(需要 viewport-fit=cover 才能拿到非 0 值)
+   组件可以用 padding-bottom: var(--sab) 等避开 iPhone 刘海/Home Indicator */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+
+  /* 软键盘高度(由 useVisualViewport hook 写入)。键盘未弹出时为 0px。
+     ChatInput 等组件用 padding-bottom: var(--keyboard-height, 0px) 顶住键盘。 */
+  --keyboard-height: 0px;
 }
 
 body {
@@ -149,6 +165,20 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+
+  /* 聊天消息滚动容器:防止整页橡皮筋回弹 */
+  .scroll-contain {
+    overscroll-behavior: contain;
+  }
+
+  /* 触屏设备(无 hover)直接显示按钮;桌面端 hover 才显示。
+     用来替代"纯靠 group-hover 显示"的编辑/删除按钮等,
+     让手机端用户永远能看到并点中这些操作。 */
+  @media (hover: none) {
+    .show-on-touch {
+      opacity: 1 !important;
+    }
+  }
 }
 
 /* 侧边栏会话列表逐个淡入(macOS 风格缓动,配合 inline animationDelay 错峰) */
@@ -165,4 +195,189 @@ body {
 
 .sidebar-item-enter {
   animation: sidebar-item-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+
+/* KaTeX 数学公式:在窄屏允许横向滚动,避免撑破消息气泡宽度 */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  /* 行内公式居中展示时的换行行为 */
+  padding: 0.25rem 0;
+}
+
+.katex-display::-webkit-scrollbar {
+  height: 4px;
+}
+
+/* 行内公式:不破坏换行,hover 时给一个浅底提示 */
+.katex {
+  color: inherit;
+  transition: background-color 0.12s ease;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.katex:hover {
+  background-color: rgba(99, 102, 241, 0.06);
+}
+
+.dark .katex:hover {
+  background-color: rgba(129, 140, 248, 0.12);
+}
+
+/* 函数图像(function-plot) 暗色适配:
+   function-plot 用 SVG,主样式写在行内,我们只覆盖容器继承与选中提示 */
+.plot-canvas {
+  color: inherit;
+  font-family: inherit;
+}
+
+.plot-canvas svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.plot-canvas text {
+  /* function-plot 通过 axisColor 控制,这里兜底 */
+  fill: currentColor;
+  font-family: inherit;
+}
+
+/* function-plot 内部的标题默认 25px,过大,在此调小 */
+.plot-canvas text.title {
+  font-size: 14px !important;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* 隐藏 function-plot 的默认轴线和辅助原线 —— 居中坐标系由 PlotAxes 组件接管 */
+.plot-canvas .x.axis,
+.plot-canvas .y.axis,
+.plot-canvas path.y.origin,
+.plot-canvas path.x.origin {
+  display: none !important;
+}
+
+/* mark 标签药丸:半透明白底 + 阴影;d3 直接给的是 svg group,所以用 class 命中 */
+.plot-mark-pill {
+  paint-order: stroke;
+  stroke-linejoin: round;
+}
+
+.plot-canvas .dot-pulse {
+  /* 让小红点略微"呼吸"提示用户它是可交互的 */
+  animation: plot-dot-pulse 2.4s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes plot-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.3); opacity: 0.6; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plot-canvas .dot-pulse {
+    animation: none;
+  }
+}
+
+/* 全屏时浮层容器:圆角 + 阴影 */
+.plot-block-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+.dark .plot-block-card {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* 数学公式悬浮工具栏:
+   MathToolButton 用 inline style 注入主样式,这里只补一个细节:hover 容器时不抖动 */
+.math-toolbar {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Tauri 桌面客户端专属样式 ─────────────────────────────
+   [data-tauri] 属性由 Tauri WebView 自动注入到 <html>，
+   浏览器开发时（npm run dev）永远不存在。
+   这里写任何客户端定制，web 端完全不受影响。
+   ─────────────────────────────────────────────────────── */
+[data-tauri] {
+  /* 窗口圆角：配合 transparent:true 制造圆角窗口 */
+  border-radius: 12px;
+  overflow: hidden;
+
+  /* 示例：客户端全局优化 */
+  /* scrollbar 宽度 */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(127, 127, 127, 0.3) transparent;
+}
+
+/* 桌面端：去除外层 padding，让圆角容器直接贴窗口边缘（macOS 浮窗感） */
+@media (min-width: 1024px) {
+  [data-tauri] .h-screen.bg-surface-muted {
+    padding: 0 !important;
+  }
+}
+
+/* 桌面端：调整圆角大小和阴影匹配全屏感 */
+@media (min-width: 1024px) {
+  [data-tauri] .shadow-2xl.border-line {
+    border-radius: 12px !important;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25) !important;
+  }
+}
+
+/* 隐藏浏览器右键菜单（已经在 layout.tsx 用 JS 拦截，
+   这里给一个兜底 CSS 方案） */
+[data-tauri] * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 允许特定元素可选中（聊天消息等） */
+[data-tauri] .message-content,
+[data-tauri] .chat-input {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 客户端专属滚动条样式 */
+[data-tauri] ::-webkit-scrollbar {
+  width: 6px;
+}
+[data-tauri] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-tauri] ::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.3);
+  border-radius: 3px;
+}
+
+/* 客户端标题栏：去掉浏览器默认 focus 环 */
+[data-tauri] .title-bar button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* 客户端禁止图片拖拽保存（可选，防止误操作） */
+/*
+[data-tauri] img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+*/
+
+/* ── Tauri 拖拽区自动隔离 ─────────────────────────────
+   在 header 上设了 data-tauri-drag-region 的元素
+   内部所有交互控件自动排除拖拽,无需逐个加 style。
+   ─────────────────────────────────────────────────── */
+[data-tauri] [data-tauri-drag-region] button,
+[data-tauri] [data-tauri-drag-region] a,
+[data-tauri] [data-tauri-drag-region] input,
+[data-tauri] [data-tauri-drag-region] select,
+[data-tauri] [data-tauri-drag-region] textarea {
+  -webkit-app-region: no-drag;
 }

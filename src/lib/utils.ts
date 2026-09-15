@@ -10,18 +10,36 @@ export function cn(...inputs: ClassValue[]) {
  * 标签抽取后的正文为空。此时从推理文本尾部拆出答案部分作为正文。
  *
  * 拆分优先级:
- * 1. 按 "【答案】" / "答案：" 等标记从最后一个出现位置切分
+ * 1. 按常见"答案/结论"标记从最后一个出现位置切分
  * 2. 无标记时取最后一个非空行作为正文
  * 3. 单行无标记时整个推理作为正文(推理置空,等价于模型未用标签)
  */
 export function splitReasoningTail(reasoning: string): { head: string; tail: string } {
-  const markers = ["【答案】", "答案：", "答案:", "Answer:", "Answer："]
+  // 扩展标记列表,覆盖中英文常见措辞,避免"模型有输出但无法切分"导致正文为空
+  const markers = [
+    // 中文 - 显式标记
+    '【答案】', '【解答】', '【结论】', '【最终答案】', '【最终结论】',
+    '【回答】', '【回复】', '【回复如下】',
+    // 中文 - 带冒号标记(全角)
+    '答案：', '解答：', '结论：', '最终结论：', '最终答案：',
+    '回答如下：', '回复如下：', '总结：', '总结一下：',
+    '所以答案是：', '所以结论是：', '综上：', '综上，',
+    // 中文 - 带冒号标记(半角)
+    '答案:', '解答:', '结论:', '最终结论:', '最终答案:',
+    '回答如下:', '回复如下:', '总结:', '总结一下:',
+    '所以答案是:', '所以结论是:', '综上:',
+    // 英文 - 带冒号
+    'Answer:', 'Answer：', 'Final answer:', 'Final Answer:',
+    'Conclusion:', 'Conclusion：', 'Result:', 'Result：',
+    'So the answer is:', 'So the answer is：',
+    'To summarize:', 'In summary:', 'In conclusion:',
+  ]
   for (const marker of markers) {
     const idx = reasoning.lastIndexOf(marker)
     if (idx >= 0) {
       const tail = reasoning.slice(idx).trim()
       // 标记后面必须有实际内容才切分,避免切出空正文
-      if (tail.length > marker.length) {
+      if (tail.length > marker.length + 1) {
         return { head: reasoning.slice(0, idx).trim(), tail }
       }
     }

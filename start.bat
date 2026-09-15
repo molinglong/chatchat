@@ -66,7 +66,7 @@ echo        数据库连接正常
 REM ---------- 3. 切换到项目目录 ----------
 echo.
 echo [3/5] 切换到项目目录...
-cd /d "D:\xiaz\项目表\chatchat\aichatt\aichatt\aichatt"
+cd /d "D:\xiaz\项目表\chatchat\aichatt\aichatt\aichatt\aichatt"
 if %ERRORLEVEL% NEQ 0 (
     echo  切换目录失败！
     pause

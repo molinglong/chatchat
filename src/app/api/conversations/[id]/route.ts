@@ -1,8 +1,112 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/db'
 import { z } from 'zod'
 import { deleteReferencedFiles } from '@/lib/uploads'
+
+/**
+ * GET /api/conversations/[id]
+ *
+ * 返回单个会话的完整数据,包括消息列表。
+ * 设计目的:让 /chat/c/[id] 可以是 Client Component,
+ * 这样 Tauri 桌面端静态导出时,该页不再依赖 Server runtime。
+ *
+ * 返回结构:
+ * {
+ *   id, title, model, mode, styleOffset,
+ *   compareModels: string[],   // 已 JSON.parse 过的数组(对比模式)
+ *   messages: Array<{
+ *     id, role, content, reasoning?, model?, groupId?,
+ *     attachments: Attachment[],   // 已 JSON.parse
+ *     promptTokens?, completionTokens?, createdAt
+ *   }>
+ * }
+ */
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const session = await auth()
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { id } = params
+
+  const conversation = await prisma.conversation.findFirst({
+    where: {
+      id,
+      userId: session.user.id,
+    },
+    include: {
+      messages: {
+        orderBy: { createdAt: 'asc' },
+      },
+    },
+  })
+
+  if (!conversation) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  // 解析 JSON 字段供前端直接消费,避免前端重复处理
+  const messages = conversation.messages.map((m) => {
+    let attachments: unknown[] = []
+    if (m.attachments) {
+      try {
+        const parsed = JSON.parse(m.attachments)
+        if (Array.isArray(parsed)) attachments = parsed
+      } catch {
+        // 损坏 JSON 返回空数组,前端兜底处理
+      }
+    }
+    let metadata: unknown = null
+    if (m.metadata) {
+      try {
+        const parsed = JSON.parse(m.metadata)
+        if (parsed && typeof parsed === 'object') metadata = parsed
+      } catch {
+        // 损坏 JSON 视为无 metadata,前端按普通 system 文本渲染
+      }
+    }
+    return {
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      reasoning: m.reasoning,
+      model: m.model,
+      groupId: m.groupId,
+      attachments,
+      // 结构化 UI 提示:{kind, sourceId, sourceTitle, ...}
+      // 仅由后端写入;前端按 kind 分发渲染分支
+      metadata,
+      promptTokens: m.promptTokens,
+      completionTokens: m.completionTokens,
+      createdAt: m.createdAt,
+    }
+  })
+
+  let compareModels: string[] = []
+  if (conversation.compareModels) {
+    try {
+      const parsed = JSON.parse(conversation.compareModels)
+      if (Array.isArray(parsed)) compareModels = parsed.filter((x): x is string => typeof x === 'string')
+    } catch {
+      // ignore
+    }
+  }
+
+  return NextResponse.json({
+    id: conversation.id,
+    title: conversation.title,
+    model: conversation.model,
+    mode: conversation.mode ?? 'single',
+    styleOffset: conversation.styleOffset ?? 0,
+    stylePreset: conversation.stylePreset ?? null, // 新版 preset(null = balanced)
+    compareModels,
+    messages,
+  })
+}
 
 const patchSchema = z.object({
   title: z.string().min(1).max(200).optional(),

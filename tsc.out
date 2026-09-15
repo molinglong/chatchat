@@ -1,0 +1,13 @@
+src/app/api/explore/assistant/route.ts(53,36): error TS2339: Property 'displayName' does not exist on type 'ProviderDefinition'.
+src/app/api/explore/fact-check/route.ts(84,11): error TS2345: Argument of type 'Promise<number | void>' is not assignable to parameter of type 'Promise<void>'.
+  Type 'number | void' is not assignable to type 'void'.
+    Type 'number' is not assignable to type 'void'.
+src/app/api/explore/fact-check/route.ts(101,11): error TS2345: Argument of type 'Promise<number | void>' is not assignable to parameter of type 'Promise<void>'.
+  Type 'number | void' is not assignable to type 'void'.
+    Type 'number' is not assignable to type 'void'.
+src/app/api/provider-models/test/route.ts(48,7): error TS2353: Object literal may only specify known properties, and 'maxTokens' does not exist in type 'LanguageModelCallOptions & RequestOptions<ToolSet> & { instructions?: Instructions | undefined; system?: Instructions | undefined; allowSystemInMessages?: boolean | undefined; } & { ...; } & { ...; } & { ...; } & { ...; }'.
+src/app/api/provider-models/test/route.ts(108,10): error TS2454: Variable 'apiKey' is used before being assigned.
+src/app/api/provider-models/test/route.ts(132,7): error TS2353: Object literal may only specify known properties, and 'maxTokens' does not exist in type 'LanguageModelCallOptions & RequestOptions<ToolSet> & { instructions?: Instructions | undefined; system?: Instructions | undefined; allowSystemInMessages?: boolean | undefined; } & { ...; } & { ...; } & { ...; } & { ...; }'.
+src/components/chat/ModelSelector.tsx(330,17): error TS17001: JSX elements cannot have multiple attributes with the same name.
+src/components/explore/AssistantPanel.tsx(235,20): error TS2304: Cannot find name 'Sparkles'.
+src/lib/toast.ts(33,14): error TS2307: Cannot find module 'izitoast/dist/css/iziToast.min.css' or its corresponding type declarations.

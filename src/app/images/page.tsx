@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { Suspense, useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import Image from 'next/image'
 import {
   Loader2,
@@ -20,6 +21,8 @@ import {
   Upload,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { queryKeys, STALE } from '@/lib/query/keys'
+import { fetchJson } from '@/lib/query/fetcher'
 import { deleteUploadedFile } from '@/components/chat/FileUpload'
 
 interface GeneratedImage {
@@ -47,7 +50,7 @@ const PROMPT_PRESETS = [
   '极简几何风格的山脉海报,扁平设计',
 ]
 
-export default function ImagesPage() {
+function ImagesContent() {
   const [prompt, setPrompt] = useState('')
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -56,11 +59,14 @@ export default function ImagesPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [total, setTotal] = useState(0)
-  const [imageSettings, setImageSettings] = useState({
+  // 用户当前的 model/size 选择由本地 state 持有,与"模型列表"分离。
+  // useState 初始化在 query data 尚未到达时使用 fallback,然后用 useEffect 一次性同步。
+  const [userImageConfig, setUserImageConfig] = useState<{
+    model: string
+    size: string
+  }>({
     model: 'builtin:wanx2.1-t2i-turbo',
     size: '1024*1024',
-    builtinModels: [] as Record<string, unknown>[],
-    customModels: [] as Record<string, unknown>[],
   })
   const [viewMode, setViewMode] = useState<'gallery' | 'preview'>('gallery')
   const [latestGeneratedId, setLatestGeneratedId] = useState<string | null>(null)
@@ -116,19 +122,55 @@ export default function ImagesPage() {
       .finally(() => setLoadingList(false))
   }, [fetchPage])
 
+  // ── 图片设置(模型 + 尺寸) ─────────────────────────────────
+  // 5 分钟 staleTime 内跨路由共享,首次进入切到 images 时几乎秒开。
+  const settingsQuery = useSuspenseQuery<{
+    settings?: { imageModel?: string; imageSize?: string }
+    builtinModels?: Array<Record<string, unknown>>
+    customModels?: Array<Record<string, unknown>>
+  }>({
+    queryKey: queryKeys.images.settings(),
+    queryFn: () =>
+      fetchJson<{
+        settings?: { imageModel?: string; imageSize?: string }
+        builtinModels?: Array<Record<string, unknown>>
+        customModels?: Array<Record<string, unknown>>
+      }>('/api/image-settings'),
+    staleTime: STALE.imageSettings,
+  })
+
+  const imageSettingsFromQuery = settingsQuery.data
+  // 用户当前的 model/size 选择来自上方 userImageConfig (useState)。
+  const settingsHydratedRef = useRef(false)
+  // 第一次拿到 query data 后,同步 DB 中的当前选择,之后不再覆盖用户操作。
   useEffect(() => {
-    fetch('/api/image-settings')
-      .then((r) => r.json())
-      .then((data) => {
-        setImageSettings({
-          model: data.settings?.imageModel ?? 'builtin:wanx2.1-t2i-turbo',
-          size: data.settings?.imageSize ?? '1024*1024',
-          builtinModels: data.builtinModels ?? [],
-          customModels: data.customModels ?? [],
-        })
-      })
-      .catch(() => {})
-  }, [])
+    if (settingsHydratedRef.current) return
+    if (!settingsQuery.data) return
+    settingsHydratedRef.current = true
+    setUserImageConfig((prev) => ({
+      model: settingsQuery.data?.settings?.imageModel ?? prev.model,
+      size: settingsQuery.data?.settings?.imageSize ?? prev.size,
+    }))
+  }, [settingsQuery.data])
+
+  const imageSettings = useMemo(() => {
+    const data = settingsQuery.data
+    return {
+      model: userImageConfig.model,
+      size: userImageConfig.size,
+      builtinModels: data?.builtinModels ?? ([] as Array<Record<string, unknown>>),
+      customModels: data?.customModels ?? ([] as Array<Record<string, unknown>>),
+    }
+  }, [settingsQuery.data, userImageConfig])
+
+  const setImageSettings = useCallback(
+    (updater: (prev: typeof imageSettings) => typeof imageSettings) => {
+      const next = updater(imageSettings)
+      // builtin/custom 列表由 query 供给,只接受 model/size 的本地修改
+      setUserImageConfig({ model: next.model, size: next.size })
+    },
+    [imageSettings]
+  )
 
   // 监听:用户上传了参考图,但当前模型不支持 → 自动切换到 qwen-image-edit
   useEffect(() => {
@@ -426,8 +468,8 @@ export default function ImagesPage() {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col lg:grid lg:grid-cols-[40%_1fr] min-h-0 overflow-hidden">
-        <aside className="w-full shrink-0 border-b lg:border-b-0 lg:border-r border-line/50 p-4 flex flex-col gap-3 overflow-y-auto">
+      <div className="flex-1 flex flex-col md:grid md:grid-cols-[40%_1fr] min-h-0 overflow-hidden">
+        <aside className="w-full shrink-0 border-b md:border-b-0 md:border-r border-line/50 p-4 flex flex-col gap-3 overflow-y-auto">
           <div>
             <label className="text-xs text-content-secondary font-medium">提示词</label>
             <textarea
@@ -1441,5 +1483,17 @@ function ImageCard({
         </div>
       )}
     </div>
+  )
+}
+
+// ── Default export ───────────────────────────────────────────────
+// 用 Suspense 包住 ImagesContent:useSuspenseQuery 在 cache miss 时抛 promise,
+// Next.js App Router 的 Router Suspense 自动用 loading.tsx 兜底;
+// cache hit(TopBar hover/click 已预热)则同步渲染,体感"瞬间"。
+export default function ImagesPage() {
+  return (
+    <Suspense>
+      <ImagesContent />
+    </Suspense>
   )
 }

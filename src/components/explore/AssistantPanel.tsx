@@ -15,6 +15,8 @@ interface AssistantPanelProps {
   analysis?: string | null
   evidenceResults?: string | null
   evidenceStructured?: SearchStructured | null
+  /** 自定义外层 className(移动端用来切换"全宽 / 限宽"布局) */
+  className?: string
 }
 
 type Tab = 'search' | 'logic' | 'polish'
@@ -29,6 +31,7 @@ export function AssistantPanel({
   analysis,
   evidenceResults,
   evidenceStructured,
+  className,
 }: AssistantPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('search')
   const [searchQuery, setSearchQuery] = useState('')
@@ -81,7 +84,12 @@ export function AssistantPanel({
   ] : []
 
   return (
-    <div className="w-80 shrink-0 border-l border-line/60 bg-surface-muted/30 flex flex-col overflow-hidden">
+    <div className={cn(
+      // 移动端:全宽,顶部边框;桌面端:固定 320px,左侧边框
+      'w-full md:w-80 shrink-0 md:shrink-0 border-t md:border-t-0 md:border-l border-line/60 bg-surface-muted/30 flex flex-col overflow-hidden',
+      'min-h-[280px] md:min-h-0',
+      className,
+    )}>
       {/* 标签切换 */}
       <div className="shrink-0 flex border-b border-line/60">
         <TabButton

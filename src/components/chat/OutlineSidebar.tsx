@@ -220,18 +220,25 @@ export function OutlineSidebar({ messages, scrollContainer, className }: Outline
       )}
     >
       {/* ============================================================
-          Bridge 隐形桥接层:Bridge 跨越 Popover + 间隙 + trigger 列的区域,
-          用来吸收鼠标穿过间隙时的 mouseleave,从而不会触发关闭。
+          Bridge 隐形桥接层:Bridge 跨越 trigger + 一点点右偏移 + 极少 Popover 右缘
+          的区域,用来吸收鼠标穿过间隙时的 mouseleave,从而不会触发关闭。
           它本身完全透明,不渲染视觉。
+
+          关键:宽度必须 ≤ OutlineSidebar 右侧 trigger 列的左缘位置,
+          否则会延伸到聊天内容区,吞掉 MermaidBlock 等右侧按钮的点击
+          (历史上 w-[286px] 时,会把 Maximize 按钮大部分挡住,只能从左下角点到)。
+          现在只覆盖 trigger 40px + right-1.5 偏移 6px + 14px Popover 缓冲 = 60px,
+          聊天内容在中等视口(≥ 1024px)下完全不受影响。
          ============================================================ */}
       <div
         aria-hidden
         onMouseEnter={cancelClose}
         onMouseLeave={scheduleClose}
         className={cn(
-          // 覆盖 trigger (40) + gap (6) + Popover (240) = 286
+          // 固定在视口右墙,垂直居中
           'fixed top-1/2 -translate-y-1/2 right-0 z-30',
-          'h-[60vh] w-[286px] pointer-events-auto bg-transparent',
+          // 缩窄到只覆盖 trigger + 缓冲,不再延伸到聊天内容区
+          'h-[60vh] w-[60px] pointer-events-auto bg-transparent',
         )}
       />
       {/* ============================================================

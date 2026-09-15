@@ -13,20 +13,21 @@ import {
 import { auth } from "@/lib/auth"
 import { prisma } from "@/lib/db"
 import { decrypt } from "@/lib/crypto"
-import { createProviderInstance, getModel } from "@/lib/ai/registry"
+import { getEffectiveModel, createProviderInstanceForEffectiveModel } from "@/lib/ai/registry"
 import { buildCustomModelDefinition, resolveApiKey, createCustomLanguageModel } from "@/lib/ai/custom-model"
 import { buildMemorySystemPrompt, getRelevantMemories, extractAndSaveMemories } from "@/lib/memory"
 import { generateImage, extractImagePrompts, IMG_MARKER_REGEX } from "@/lib/ai/image"
 import { generateConversationTitle } from "@/lib/ai/title-generator"
-import { getStylePrompt } from "@/lib/ai/style"
+import { getStylePromptFromPreset, STYLE_PRESETS, presetFromOffset } from "@/lib/ai/style"
 import { splitReasoningTail } from "@/lib/utils"
 import { createWebSearchTool } from "@/lib/ai/search"
+import { loadLatestSummary, maybeCompressContext } from "@/lib/context-compression"
 import type { SearchEngineId } from "@/lib/ai/search-engines"
 import type { Attachment } from "@/lib/attachment-types"
 import { sanitizeUploadName, readUploadFile, readUploadAsDataUrl } from "@/lib/uploads"
 import type { ModelDefinition } from "@/lib/ai/types"
 
-export const maxDuration = 60 // seconds – Vercel Pro allows up to 300
+export const maxDuration = 120 // seconds – 深度思考耗时较长,Vercel Pro 允许到 300
 
 interface ChatRequestBody {
   model: string
@@ -35,7 +36,8 @@ interface ChatRequestBody {
   deepThink?: boolean
   groupId?: string
   attachments?: Attachment[]
-  styleOffset?: number // 0-100, default 50 if not provided
+  styleOffset?: number // 旧版 0-100, default 50 if not provided(向后兼容)
+  stylePreset?: string // 新版 preset id(balanced/practical/dev/editor/mentor/scholar)
   webSearch?: boolean // 客户端本次请求是否开启联网搜索
   searchEngine?: SearchEngineId // 联网搜索引擎，默认 qianfan
 }
@@ -51,6 +53,8 @@ interface IncomingMessage {
   content?: string | IncomingPart[]
   parts?: IncomingPart[]
   text?: string
+  /** 后端写入的结构化 UI 提示: { kind: 'branch_summary', ... } */
+  metadata?: unknown
 }
 
 /**
@@ -61,26 +65,28 @@ function convertToModelMessages(messages: IncomingMessage[]): ModelMessage[] {
   return messages
     .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
     .map((m) => {
+      let textContent = ""
       // If message already has string content, use it directly
       if (typeof m.content === "string" && m.content) {
-        return { role: m.role, content: m.content } as ModelMessage
-      }
-      // If content is a valid array of content parts, use it
-      if (Array.isArray(m.content) && m.content.length > 0) {
-        return { role: m.role, content: m.content } as unknown as ModelMessage
-      }
-      // AI SDK v7 UIMessage format: extract text from `parts`
-      if (Array.isArray(m.parts)) {
-        const textParts = m.parts
+        textContent = m.content
+      } else if (Array.isArray(m.content) && m.content.length > 0) {
+        // content is already structured parts — pass through
+        const result = { role: m.role, content: m.content } as unknown as ModelMessage
+        if (m.metadata) (result as { metadata?: unknown }).metadata = m.metadata
+        return result
+      } else if (Array.isArray(m.parts)) {
+        textContent = m.parts
           .filter((p: IncomingPart) => p.type === "text")
           .map((p: IncomingPart) => p.text ?? "")
           .join("")
-        if (textParts) {
-          return { role: m.role, content: textParts } as ModelMessage
-        }
+      } else {
+        textContent = String(m.content ?? m.text ?? "")
       }
-      // Fallback: use content or empty string
-      return { role: m.role, content: String(m.content ?? m.text ?? "") } as ModelMessage
+      const result = { role: m.role, content: textContent } as ModelMessage
+      // Preserve metadata so downstream code can identify special message kinds
+      // (e.g. branch_summary system messages that must be moved into the `system` param).
+      if (m.metadata) (result as { metadata?: unknown }).metadata = m.metadata
+      return result
     })
     .filter((m) => m.content !== "")
 }
@@ -181,30 +187,40 @@ export async function POST(req: NextRequest) {
 
     console.log(`[chat] Processing request for user ${userId}, model: ${modelId}, messages: ${rawMessages?.length || 0}, deepThink: ${deepThink}, webSearch: ${webSearch}`)
 
+    // 新版 preset 优先:body 显式传 stylePreset 时用之;否则从 DB 读 preset;
+    // preset 缺失/null 时,回退到旧的 styleOffset(老会话);offset 也无则默认 balanced。
+    const requestedStylePreset = STYLE_PRESETS.find((p) => p.id === body.stylePreset)?.id
     const requestedStyleOffset =
       typeof body.styleOffset === 'number' && Number.isFinite(body.styleOffset)
         ? Math.max(0, Math.min(100, Math.round(body.styleOffset)))
         : undefined
 
+    let conversationStylePreset: string | null = null
     let conversationStyleOffset = 50
     if (conversationId) {
       try {
         const conv = await prisma.conversation.findFirst({
           where: { id: conversationId, userId },
-          select: { styleOffset: true },
+          select: { styleOffset: true, stylePreset: true },
         })
+        conversationStylePreset = conv?.stylePreset ?? null
         conversationStyleOffset = conv?.styleOffset ?? 50
       } catch (err) {
         console.error("[chat] Failed to fetch conversation:", err)
       }
     }
-    const effectiveStyleOffset = requestedStyleOffset ?? conversationStyleOffset
-    console.log(`[chat] Style offset: ${effectiveStyleOffset} (body: ${requestedStyleOffset}, conv: ${conversationStyleOffset})`)
+
+    // 解析最终生效的 preset:body > DB preset > 由 offset 推导 > balanced
+    const effectiveStylePreset: string =
+      requestedStylePreset ??
+      conversationStylePreset ??
+      presetFromOffset(requestedStyleOffset ?? conversationStyleOffset)
+    console.log(`[chat] Style preset: ${effectiveStylePreset} (body: ${requestedStylePreset ?? '-'}, conv: ${conversationStylePreset ?? '-'})`)
 
   // Validate model (builtin or custom)
   let modelDef: ModelDefinition
   let apiKey: string | undefined
-  let provider: (modelId: string) => ReturnType<typeof createProviderInstance>
+  let provider: (modelId: string) => ReturnType<typeof createProviderInstanceForEffectiveModel>
   let realModelId = modelId // for builtin models same as input; for custom use modelId from DB
 
   if (modelId.startsWith("custom:")) {
@@ -224,7 +240,8 @@ export async function POST(req: NextRequest) {
     // Build provider instance (native for provider-key reuse without baseURL; OpenAI-compatible otherwise)
     provider = () => createCustomLanguageModel(cmRecord, apiKey)
   } else {
-    const builtinModelDef = getModel(modelId)
+    // 用户级有效模型：内置预置（未被该用户隐藏）+ 用户添加的自定义模型（复用 provider Key）
+    const builtinModelDef = await getEffectiveModel(userId, modelId)
     if (!builtinModelDef) {
       console.error(`[chat] Unknown model: ${modelId}`)
       return new Response(JSON.stringify({ error: `Unknown model: ${modelId}` }), {
@@ -275,7 +292,8 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      provider = createProviderInstance(modelId, apiKey)
+      // 用户添加的模型（非 custom: 前缀）使用 modelDef.provider 查找 provider
+      provider = createProviderInstanceForEffectiveModel(modelDef, apiKey)
     } catch (err) {
       console.error(`[chat] Failed to create provider instance for ${modelId}:`, err)
       return new Response(
@@ -286,7 +304,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Convert incoming messages to ModelMessage format for streamText
-  const messages = convertToModelMessages(rawMessages)
+  let messages = convertToModelMessages(rawMessages)
 
   // 附件内容注入:图片转多模态 image part(仅视觉模型),文本文件读入正文
   if (attachments.length > 0) {
@@ -336,6 +354,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 长上下文压缩: 如果该会话已有"远期摘要",在 messages 头部注入一条 system
+  // (即用摘要替代之前被压缩掉的早期原文,避免长对话撞模型 contextWindow)
+  if (conversationId) {
+    try {
+      const latestSummary = await loadLatestSummary(conversationId)
+      if (latestSummary?.content) {
+        const SUMMARY_HEADER =
+          "## 早期对话摘要（系统自动压缩,可能不完整,不要引用其中未确认的具体数字/代码细节）"
+        systemParts.unshift(`${SUMMARY_HEADER}\n${latestSummary.content}`)
+        console.log(
+          `[chat] injected summary (${latestSummary.content.length} chars, covered ${latestSummary.coveredMessages} msgs) for conv ${conversationId}`
+        )
+      }
+    } catch (err) {
+      console.error("[chat] Failed to inject summary:", err)
+    }
+  }
+
   // Extract text from the last user message for persistence & memory relevance
   const lastRawUserMsg = [...rawMessages].reverse().find((m) => m.role === "user")
   const userContent = lastRawUserMsg ? extractTextContent(lastRawUserMsg) : ""
@@ -374,8 +410,8 @@ export async function POST(req: NextRequest) {
   if (memorySystemPrompt) systemParts.push(memorySystemPrompt)
   if (clarifyEnabled) systemParts.push(clarifySystemPrompt)
 
-  // Style prompt - add conversation style settings
-  systemParts.push(getStylePrompt(effectiveStyleOffset))
+  // Style prompt - 用 preset 渲染(新版)
+  systemParts.push(getStylePromptFromPreset(effectiveStylePreset))
 
   // Visualization capabilities — tell the model to auto-use diagrams/charts
   systemParts.push([
@@ -383,8 +419,20 @@ export async function POST(req: NextRequest) {
     '主动用代码块让回答更直观，无需用户要求：',
     '- 流程图/时序图/架构图等用 ```mermaid',
     '- 数据图表用 ```chart 加 JSON：{"type":"bar|line|pie|area","data":{"labels":[],"datasets":[{"label":"","data":[]}]},"title":""}',
+    '- 函数图像/数学曲线用 ```plot 加 DSL(客户端有 function-plot 渲染器,不要改用 ASCII / SVG / 在线工具):',
+    '  ```plot',
+    '  y = sin(x)',
+    '  y = cos(x), dashed',
+    '  range: [-π, 2π]',
+    '  yrange: [-2, 2]',
+    '  mark: (π/2, 1) "极大值"',
+    '  mark: (0, 0) "原点"',
+    '  title: 三角函数',
+    '  grid: true',
+    '  ```',
+    '  每行一条指令;支持: `y = <expr>[, dashed|dotted][, range:[a,b]][, color:#hex]` / `range:[a,b]`(x 轴) / `yrange:[a,b]`(y 轴) / `mark:(x,y) "label"` / `title:"..."` / `grid:true|false`;常量支持 π 和 e;多函数时画在同一坐标系。',
     '- 数学公式用 $...$（行内）或 $$...$$（独立行，LaTeX 语法）',
-    '比较数据时自动配图表，讲流程时自动配 mermaid，数学内容一律用 LaTeX。',
+    '比较数据时自动配图表，讲流程时自动配 mermaid，数学内容一律用 LaTeX，画函数曲线一律用 plot(不要再用 ASCII / SVG / Desmos 建议)。',
   ].join('\n'))
 
   // Image generation — tell the model how to request images
@@ -476,7 +524,7 @@ export async function POST(req: NextRequest) {
         userId,
         title: userContent.slice(0, 40) || "新对话",
         model: modelId,
-        styleOffset: effectiveStyleOffset,
+        stylePreset: effectiveStylePreset,
         ...(groupId ? { mode: "compare" } : {}),
       },
     })
@@ -521,11 +569,43 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // AI SDK v7 forbids system messages inside the `messages` array.
+  // Filter them out here; the compression summary (if any) is prepended to
+  // systemParts and received by the model via the `system` param instead.
+  // Branch-summary system messages are mirrored into systemParts first so the
+  // LLM actually sees the upstream context, then dropped from the messages
+  // array (the frontend still renders the summary card from DB metadata).
+  let branchSummaryInjected = 0
+  const llmMessages = messages.filter((m) => {
+    if (m.role !== "system") return true
+    const meta = (m as { metadata?: unknown }).metadata
+    if (
+      meta &&
+      typeof meta === "object" &&
+      (meta as Record<string, unknown>).kind === "branch_summary" &&
+      typeof m.content === "string" &&
+      m.content.trim()
+    ) {
+      // 分支 API 写入的内容已包含 "## 来自上文的上下文摘要(系统自动生成)" 头,
+      // 这里直接 unshift,避免重复标题
+      systemParts.unshift(m.content)
+      branchSummaryInjected++
+      return false
+    }
+    // 其他 system 消息(用户手写或其他来源):同样不喂给 LLM,避免 SDK 报错
+    return false
+  })
+  if (branchSummaryInjected > 0) {
+    console.log(`[chat] injected ${branchSummaryInjected} branch_summary into system prompt`)
+  }
+  // systemParts 可能被上面 unshift 过,重新 join
+  const finalSystem = systemParts.length > 0 ? systemParts.join('\n\n') : undefined
+
   // Stream the response
   const result = streamText({
     model,
-    messages,
-    ...(system ? { system } : {}),
+    messages: llmMessages,
+    ...(finalSystem ? { system: finalSystem } : {}),
     ...(searchTool ? { tools: { web_search: searchTool } } : {}),
     // 让模型能"思考 → 调工具 → 拿到结果 → 继续生成最终答案",
     // 默认 stepCountIs(1) 会在调完一次工具后立刻停下,无法完成多步链式调用。
@@ -534,6 +614,13 @@ export async function POST(req: NextRequest) {
       console.log(`[chat] step finished: type=${stepType}, toolCalls=${toolCalls?.length ?? 0}, toolResults=${toolResults?.length ?? 0}, finishReason=${finishReason}`)
     },
     onFinish: async ({ text, reasoningText, finishReason, usage }) => {
+      // 诊断日志:记录流异常结束,便于排查偶发"模型没思考"问题
+      if (finishReason === 'length' || finishReason === 'error') {
+        console.warn(
+          `[chat] ABNORMAL_FINISH: reason=${finishReason}, model=${modelId}, hasText=${!!text}, hasReasoning=${!!reasoningText}, textLen=${text?.length ?? 0}, reasoningLen=${reasoningText?.length ?? 0}`
+        )
+      }
+
       // 流出错且无任何内容时不落库,避免历史中出现空白助手消息
       if (finishReason === 'error' && !text && !reasoningText) return
 
@@ -541,12 +628,28 @@ export async function POST(req: NextRequest) {
       let content = text ?? ""
       let savedReasoning = reasoningText ?? null
 
+      // 截断提示:输出被 token 上限截断时,告知用户可换模型或缩短上下文
+      if (finishReason === 'length' && content) {
+        content = content + '\n\n…(输出被 token 上限截断,可考虑换模型或缩短上下文)…'
+      }
+
+      // 诊断:深度思考模式下,若两者都为空,说明模型真的没输出思考
+      if (deepThink && !content.trim() && !savedReasoning?.trim()) {
+        console.warn(`[chat] DEEP_THINK_EMPTY: model=${modelId}, deepThink=true but both text and reasoning are empty`)
+      }
+      if (deepThink && savedReasoning) {
+        console.log(`[chat] DEEP_THINK_OK: model=${modelId}, reasoningLen=${savedReasoning.length}, contentLen=${content.length}`)
+      }
+
       // 兜底:模型把全部内容(含最终答案)都放进了 <think> 标签,导致正文为空。
       // 此时从推理尾部拆出答案部分作为正文,避免用户只看到思考过程而没有任何回答。
       if (!content.trim() && savedReasoning?.trim()) {
         const { head, tail } = splitReasoningTail(savedReasoning)
         content = tail
         savedReasoning = head || null
+        if (content) {
+          console.log(`[chat] FALLBACK_SPLIT: model=${modelId}, extracted answer from reasoning tail (reasoningLen=${savedReasoning?.length ?? 0}, contentLen=${content.length})`)
+        }
       }
 
       // 检测 [IMG:...] 标记并调用生图(自动根据用户选择的模型分发)
@@ -642,6 +745,25 @@ export async function POST(req: NextRequest) {
             model: provider(realModelId),
             userText: userContent,
             assistantText: content,
+          })
+        }
+
+        // 长上下文压缩: 当累计消息接近模型 contextWindow × 60% 时,
+        // 异步把较早的消息压缩成摘要存到 ConversationSummary,
+        // 下次请求会自动注入摘要代替被压缩的原文。
+        // 不在对比模式下触发(多泳道并发写入易产生状态竞争)。
+        if (!groupId && convId) {
+          const totalMessages = await prisma.message.count({
+            where: { conversationId: convId, role: { in: ["user", "assistant"] } },
+          })
+          maybeCompressContext({
+            conversationId: convId,
+            modelId,
+            model: provider(realModelId),
+            userText: userContent,
+            assistantText: content,
+            contextWindow: modelDef.contextWindow,
+            totalMessages,
           })
         }
       } catch (error) {

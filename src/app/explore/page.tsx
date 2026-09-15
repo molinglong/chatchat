@@ -1,8 +1,8 @@
 'use client'
 
 import { Scale, Loader2, Sparkles, ChevronRight } from 'lucide-react'
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { getAllModels } from '@/lib/ai/registry'
+import { Suspense, useState, useCallback, useRef, useEffect } from 'react'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { OpponentLane } from '@/components/explore/OpponentLane'
 import { UserLane } from '@/components/explore/UserLane'
@@ -12,6 +12,8 @@ import { TruthSummary } from '@/components/explore/TruthSummary'
 import { ModelSelector } from '@/components/explore/ModelSelector'
 import type { SearchStructured } from '@/components/explore/SearchResults'
 import type { ModelDefinition } from '@/lib/ai/types'
+import { queryKeys, STALE } from '@/lib/query/keys'
+import { fetchJson } from '@/lib/query/fetcher'
 
 // 辩题类型
 interface Topic {
@@ -98,26 +100,67 @@ const initialState: DebateState = {
 }
 
 export default function ExplorePage() {
-  const allModels = getAllModels()
-  const [customModels, setCustomModels] = useState<ModelDefinition[]>([])
-  const [userModel, setUserModel] = useState(allModels[0]?.id || 'gpt-4o')
-  const [opponentModel, setOpponentModel] = useState(allModels[1]?.id || 'claude-3-5-sonnet')
-  const [assistantModel, setAssistantModel] = useState(allModels[0]?.id || 'gpt-4o')
+  return (
+    // Suspense 兜底:虽然 cache hit 时直接同步 render,
+    // 但极端冷启场景下 useSuspenseQuery 仍会抛 promise → fallback
+    <Suspense>
+      <ExploreContent />
+    </Suspense>
+  )
+}
 
+function ExploreContent() {
+  // ── 全局共享的 model 缓存(与 chat /c/[id] 共享同一 key)──
+  // TopBar 已通过 hover/click prefetch;这里用 useSuspenseQuery 同步命中
+  const { data: builtinModels = [] } = useSuspenseQuery<ModelDefinition[]>({
+    queryKey: queryKeys.providers(),
+    queryFn: async () => {
+      const payload = await fetchJson<
+        | Array<{ effectiveModels: ModelDefinition[] }>
+        | { providers: Array<{ effectiveModels: ModelDefinition[] }> }
+      >('/api/providers')
+      const list = Array.isArray(payload) ? payload : payload.providers ?? []
+      return list.flatMap((p) => p.effectiveModels || [])
+    },
+    staleTime: STALE.providers,
+  })
+
+  const { data: customModels = [] } = useSuspenseQuery<ModelDefinition[]>({
+    queryKey: queryKeys.customModels(),
+    queryFn: async () => {
+      const data = await fetchJson<ModelDefinition[] | { items?: ModelDefinition[] }>(
+        '/api/custom-models'
+      )
+      return Array.isArray(data) ? data : data?.items ?? []
+    },
+    staleTime: STALE.customModels,
+  })
+
+  const userModelFromList = builtinModels[0]?.id || customModels[0]?.id || 'gpt-4o'
+  const opponentModelFromList = builtinModels[1]?.id || customModels[0]?.id || 'claude-3-5-sonnet'
+  const [userModel, setUserModel] = useState(userModelFromList)
+  const [opponentModel, setOpponentModel] = useState(opponentModelFromList)
+  const [assistantModel, setAssistantModel] = useState(userModelFromList)
+
+  // 模型列表数据 refresh 后,如果当前选中的 model 已被移除/不存在,回退到默认。
+  // 这里用 useEffect 而不是 useState updater,因为我们只在新数据进入时同步。
   useEffect(() => {
-    let cancelled = false
-    fetch('/api/custom-models')
-      .then((r) => r.json())
-      .then((custom: ModelDefinition[]) => {
-        if (!cancelled) setCustomModels(custom)
-      })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [])
+    const all = [...builtinModels, ...customModels]
+    if (all.length === 0) return
+    if (!all.some((m) => m.id === userModel)) {
+      setUserModel(all[0]?.id ?? 'gpt-4o')
+    }
+    if (!all.some((m) => m.id === opponentModel)) {
+      setOpponentModel(all[1]?.id ?? all[0]?.id ?? 'claude-3-5-sonnet')
+    }
+    if (!all.some((m) => m.id === assistantModel)) {
+      setAssistantModel(all[0]?.id ?? 'gpt-4o')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [builtinModels, customModels])
 
-  const availableModels = customModels.length > 0
-    ? [...allModels, ...customModels]
-    : allModels
+  const allModels = [...builtinModels, ...customModels]
+  const availableModels = allModels.length > 0 ? allModels : []
 
   const [state, setState] = useState<DebateState>(initialState)
   const [customTopic, setCustomTopic] = useState('')
@@ -602,10 +645,10 @@ export default function ExplorePage() {
         <div className="flex-1 h-px bg-line/40" />
       </div>
 
-      {/* 用户泳道 + 助手面板 */}
-      <div className="flex-1 flex min-h-0">
+      {/* 用户泳道 + 助手面板 —— 移动端垂直堆叠,桌面端横向并排 */}
+      <div className="flex-1 flex flex-col md:flex-row min-h-0">
         {/* 用户泳道 */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden min-h-[200px] md:min-h-0">
           <UserLane
             messages={state.userMessages}
             onSend={handleSendMessage}

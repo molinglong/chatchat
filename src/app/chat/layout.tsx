@@ -16,8 +16,8 @@ export default async function ChatLayout({
   }
 
   return (
-    <div className="h-screen bg-surface-muted p-0 lg:p-1.5 overflow-hidden">
-      <div className="h-full flex overflow-hidden rounded-none lg:rounded-xl shadow-2xl border border-line bg-surface">
+    <div className="h-screen bg-surface-muted p-0 md:p-1.5 overflow-hidden">
+      <div className="h-full flex overflow-hidden rounded-none md:rounded-xl shadow-2xl border border-line bg-surface">
         <Sidebar />
         <div className="flex flex-col flex-1 min-w-0 bg-surface">
           <TopBar />

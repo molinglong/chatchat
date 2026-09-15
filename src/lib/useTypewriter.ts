@@ -36,18 +36,25 @@ export function useTypewriter(fullText: string, enabled: boolean) {
       return
     }
 
-    const interval = setInterval(() => {
+    // 用 requestAnimationFrame 替代 setInterval(8ms):
+    // - 浏览器自动节流(标签页不活跃时不触发),主线程压力小一个数量级
+    // - 与显示器刷新率对齐(60fps),视觉上反而比 125fps 更顺滑
+    // - 流式追赶时不再以 125fps 抢占主线程,点击事件不再被排队
+    let rafId: number
+
+    const tick = () => {
       setRevealedLength((prev) => {
         const target = fullTextRef.current.length
         if (prev >= target) return prev
-
         const gap = target - prev
         const step = gap > 30 ? 8 : 1
         return Math.min(prev + step, target)
       })
-    }, 8)
+      rafId = requestAnimationFrame(tick)
+    }
 
-    return () => clearInterval(interval)
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
   }, [enabled])
 
   const displayText = enabled ? fullText.slice(0, revealedLength) : fullText
