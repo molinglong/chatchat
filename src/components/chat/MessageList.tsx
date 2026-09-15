@@ -21,6 +21,7 @@ export function MessageList({
   onRegenerate,
   onEditMessage,
 }: MessageListProps) {
+  /* __RP__ */ if (typeof window !== 'undefined') { const w = window as any; w.__RC = w.__RC || {}; w.__RC['MessageList'] = (w.__RC['MessageList'] || 0) + 1 }
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const shouldAutoScrollRef = useRef(true)

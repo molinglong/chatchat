@@ -27,11 +27,11 @@ import type { Components } from 'react-markdown'
  *         "Maximum update depth exceeded" 期间的稳定模式。
  * true  = 恢复正常路由。
  *
- * 逐项恢复建议: 将下面 4 个分支条件拆成独立开关, 一次只开一个,
- * 每个观察 1-2 天; 恢复时务必保留 ChartBlock 自绘图例与
- * MermaidBlock 镜像缓存这两处修复(见 git ff3237e)。
+ * 已恢复: 无限循环根因定位为 useChat 未配置 throttle(见 ChatPanel.tsx),
+ * 与可视化组件无关。ChartBlock 自绘图例与 MermaidBlock 镜像缓存两处
+ * 修复(ff3237e)保留; 若再出现 Maximum update depth, 可先置回 false 熔断。
  */
-const VISUAL_BLOCKS_ENABLED = false
+const VISUAL_BLOCKS_ENABLED = true
 
 interface MarkdownRendererProps {
   content: string

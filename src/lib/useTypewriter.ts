@@ -15,6 +15,7 @@ import { useState, useEffect, useRef } from 'react'
  * @param enabled   Whether typewriter is active (only for assistant messages)
  */
 export function useTypewriter(fullText: string, enabled: boolean) {
+  /* __RP__ */ if (typeof window !== 'undefined') { const w = window as any; w.__RC = w.__RC || {}; w.__RC['useTypewriter'] = (w.__RC['useTypewriter'] || 0) + 1 }
   const [revealedLength, setRevealedLength] = useState(0)
   const fullTextRef = useRef(fullText)
   const prevLengthRef = useRef(fullText.length)

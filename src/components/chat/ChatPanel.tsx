@@ -64,6 +64,7 @@ export function ChatPanel({
   laneInitialMessages,
   initialStylePreset,
 }: ChatPanelProps) {
+  /* __RP__ */ if (typeof window !== 'undefined') { const w = window as any; w.__RC = w.__RC || {}; w.__RC['ChatPanel'] = (w.__RC['ChatPanel'] || 0) + 1 }
   const [currentModel, setCurrentModel] = useState(initialModel)
   const [conversationId, setConversationId] = useState(initialConversationId)
   const conversationStylePreset = useChatStore(state => state.conversationStylePreset)
@@ -343,6 +344,10 @@ export function ChatPanel({
   const setMessagesRef = useRef<((updater: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void) | null>(null)
 
   const { messages, sendMessage, setMessages, stop, status, error, clearError, regenerate } = useChat<UIMessage>({
+    // 流式 UI 更新节流(AI SDK 官方机制): 不节流时每个 chunk 都触发强制同步重渲染,
+    // 快速流式下会累积 React nestedUpdateCount 至 50 抛 "Maximum update depth exceeded",
+    // 传 throttle 后通知频率与渲染耗时脱钩,配合打字机视觉平滑度不受影响。
+    throttle: 50,
     ...(initialConversationId ? { id: initialConversationId } : {}), // 用会话 ID 作为 useChat 实例 id(仅已有会话),避免不同会话复用同一组件时状态错乱
     transport,
     messages: initialMessages,
@@ -555,6 +560,7 @@ export function ChatPanel({
   useEffect(() => {
     if (error && error !== lastErrorRef.current) {
       lastErrorRef.current = error
+      /* __RP__ */ try { const w = window as any; console.error('[MAXDEPTH-TRAP]', (error instanceof Error ? error.message + '\n---STACK---\n' + (error.stack ?? '(no stack)') : String(error)) + '\n---RENDER-COUNTS---\n' + JSON.stringify(w.__RC ?? {})) } catch { /* 静默: trap 自身绝不能抛错 */ }
       toast.error(errorInfo?.message ?? '请求失败,请重试', {
         title: errorInfo?.type === 'api_key' ? '缺少 API Key' : '请求失败',
         timeout: 6000,

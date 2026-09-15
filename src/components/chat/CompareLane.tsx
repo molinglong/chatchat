@@ -111,6 +111,10 @@ export function CompareLane({
   const setMessagesRef = useRef<((updater: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void) | null>(null)
 
   const { messages, sendMessage, setMessages, stop, status, error, clearError, regenerate } = useChat<UIMessage>({
+    // 流式 UI 更新节流(AI SDK 官方机制): 不节流时每个 chunk 都触发强制同步重渲染,
+    // 快速流式下会累积 React nestedUpdateCount 至 50 抛 "Maximum update depth exceeded",
+    // 传 throttle 后通知频率与渲染耗时脱钩,配合打字机视觉平滑度不受影响。
+    throttle: 50,
     transport,
     messages: initialMessages,
     onFinish: async ({ message, isError, isAbort }) => {

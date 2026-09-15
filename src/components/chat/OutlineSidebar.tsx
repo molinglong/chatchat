@@ -30,6 +30,7 @@ type Tick = {
  *   - scroll-spy: 滚动聊天区时,激活态实时跟随
  */
 export function OutlineSidebar({ messages, scrollContainer, className }: OutlineSidebarProps) {
+  /* __RP__ */ if (typeof window !== 'undefined') { const w = window as any; w.__RC = w.__RC || {}; w.__RC['OutlineSidebar'] = (w.__RC['OutlineSidebar'] || 0) + 1 }
   const ticks = useMemo<Tick[]>(() => {
     const list: Tick[] = []
     messages.forEach((m) => {

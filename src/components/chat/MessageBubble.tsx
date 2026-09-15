@@ -257,6 +257,7 @@ function MessageBubbleInner({
   isFocused,
   wrapperRef,
 }: MessageBubbleProps) {
+  /* __RP__ */ if (typeof window !== 'undefined') { const w = window as any; w.__RC = w.__RC || {}; w.__RC['MessageBubble'] = (w.__RC['MessageBubble'] || 0) + 1 }
   const isUser = message.role === 'user'
   const isAssistant = message.role === 'assistant'
   const isSystem = message.role === 'system'
