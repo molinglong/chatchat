@@ -19,6 +19,20 @@ const ChartBlock = dynamic(() => import('./ChartBlock').then(m => m.ChartBlock),
 const PlotBlock = dynamic(() => import('./PlotBlock').then(m => m.PlotBlock), { ssr: false })
 import type { Components } from 'react-markdown'
 
+/**
+ * 可视化熔断开关
+ *
+ * false = 熔断模式: chart / mermaid / plot / preview 四种代码块全部降级为
+ *         普通代码块显示(可视化组件不会被加载), 用于排查
+ *         "Maximum update depth exceeded" 期间的稳定模式。
+ * true  = 恢复正常路由。
+ *
+ * 逐项恢复建议: 将下面 4 个分支条件拆成独立开关, 一次只开一个,
+ * 每个观察 1-2 天; 恢复时务必保留 ChartBlock 自绘图例与
+ * MermaidBlock 镜像缓存这两处修复(见 git ff3237e)。
+ */
+const VISUAL_BLOCKS_ENABLED = false
+
 interface MarkdownRendererProps {
   content: string
   className?: string
@@ -78,22 +92,22 @@ const components: Components = {
       const lang = match?.[1]?.toLowerCase() || ''
 
       // Route mermaid code blocks to MermaidBlock
-      if (lang === 'mermaid') {
+      if (lang === 'mermaid' && VISUAL_BLOCKS_ENABLED) {
         return <MermaidBlock code={codeString} />
       }
 
       // Route chart code blocks to ChartBlock
-      if (lang === 'chart') {
+      if (lang === 'chart' && VISUAL_BLOCKS_ENABLED) {
         return <ChartBlock code={codeString} />
       }
 
       // Route plot code blocks to PlotBlock (函数图像)
-      if (lang === 'plot' || lang === 'function-plot') {
+      if ((lang === 'plot' || lang === 'function-plot') && VISUAL_BLOCKS_ENABLED) {
         return <PlotBlock code={codeString} />
       }
 
       // Route preview code blocks to inline HTML preview
-      if (lang === 'preview' || lang === 'html-preview') {
+      if ((lang === 'preview' || lang === 'html-preview') && VISUAL_BLOCKS_ENABLED) {
         return (
           <div dangerouslySetInnerHTML={{ __html: codeString }} className="my-3 rounded-lg border border-line overflow-hidden" />
         )
