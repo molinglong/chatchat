@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useChat } from '@ai-sdk/react'
+import { useQuery } from '@tanstack/react-query'
 import { DefaultChatTransport } from 'ai'
 import type { UIMessage } from 'ai'
-import { AlertCircle, RefreshCw, Settings as SettingsIcon, X, Eye, Plus, Minus } from 'lucide-react'
+import { AlertCircle, RefreshCw, Settings as SettingsIcon, X, Eye, Plus, Minus, Play } from 'lucide-react'
 import Link from 'next/link'
 import { MessageList } from './MessageList'
 import { ChatInput } from './ChatInput'
@@ -12,6 +13,10 @@ import { ComparePanel } from './ComparePanel'
 import { OutlineSidebar } from './OutlineSidebar'
 import { useChatStore } from '@/store/chat-store'
 import { getErrorMessage } from '@/lib/chat-errors'
+import { toast } from '@/lib/toast'
+import { useVisualViewport } from '@/hooks/useVisualViewport'
+import { queryKeys, STALE } from '@/lib/query/keys'
+import { fetchJson } from '@/lib/query/fetcher'
 import type { ModelDefinition } from '@/lib/ai/types'
 import type { Attachment } from './FileUpload'
 
@@ -20,6 +25,17 @@ const DEEP_THINK_STORAGE_KEY = 'chat:deepThink'
 const WEB_SEARCH_STORAGE_KEY = 'chat:webSearch'
 const COMPARE_MODE_STORAGE_KEY = 'chat:compareMode'
 const COMPARE_MODELS_STORAGE_KEY = 'chat:compareModels'
+
+function getGreeting(): string {
+  const hour = new Date().getHours()
+  if (hour < 5) return '夜深了，还在思考？'
+  if (hour < 9) return '早上好，新的一天开始了'
+  if (hour < 12) return '上午好'
+  if (hour < 14) return '中午好'
+  if (hour < 18) return '下午好'
+  if (hour < 21) return '晚上好'
+  return '夜深了，注意休息'
+}
 
 interface ChatPanelProps {
   conversationId?: string
@@ -33,8 +49,8 @@ interface ChatPanelProps {
   compareModels?: string[]
   /** 对比模式每个泳道的初始消息 */
   laneInitialMessages?: UIMessage[][]
-  /** 当前会话已保存的回复风格，默认 50 */
-  initialStyleOffset?: number
+  /** 当前会话已保存的回复风格 preset id,默认 balanced */
+  initialStylePreset?: string | null
 }
 
 export function ChatPanel({
@@ -46,23 +62,25 @@ export function ChatPanel({
   mode,
   compareModels: compareModelsProp,
   laneInitialMessages,
-  initialStyleOffset,
+  initialStylePreset,
 }: ChatPanelProps) {
   const [currentModel, setCurrentModel] = useState(initialModel)
   const [conversationId, setConversationId] = useState(initialConversationId)
-  const conversationStyleOffset = useChatStore(state => state.conversationStyleOffset)
-  const setConversationStyleOffset = useChatStore(state => state.setConversationStyleOffset)
+  const conversationStylePreset = useChatStore(state => state.conversationStylePreset)
+  const setConversationStylePreset = useChatStore(state => state.setConversationStylePreset)
+
+  // 移动端软键盘:把键盘高度写入 --keyboard-height,让 ChatInput 用
+  // padding-bottom: var(--keyboard-height,0px) 顶住键盘。
+  useVisualViewport()
 
   useEffect(() => {
     if (initialConversationId) {
-      setConversationStyleOffset(initialStyleOffset ?? 50)
+      setConversationStylePreset(initialStylePreset ?? 'balanced')
       return
     }
-    const stored = Number(localStorage.getItem('chat:styleOffset'))
-    setConversationStyleOffset(
-      Number.isFinite(stored) ? Math.max(0, Math.min(100, stored)) : 50
-    )
-  }, [initialConversationId, initialStyleOffset, setConversationStyleOffset])
+    const stored = localStorage.getItem('chat:stylePreset')
+    setConversationStylePreset(stored || 'balanced')
+  }, [initialConversationId, initialStylePreset, setConversationStylePreset])
 
   // Preview panel state
   const previewCode = useChatStore(state => state.previewCode)
@@ -84,25 +102,37 @@ export function ChatPanel({
   // Auto-enable deepThink for reasoning models (like DeepSeek-R1), but allow user to toggle off
   const shouldAutoEnableDeepThink = initialModel && allModels.find(m => m.id === initialModel)?.supportsReasoning
   const [deepThink, setDeepThink] = useState(shouldAutoEnableDeepThink || false)
+  // Track if user manually changed deepThink to prevent auto-re-enabling
+  const userToggledDeepThink = useRef(false)
+  // Keep stable ref to allModels so we can read it inside effects without causing re-runs.
+  // Must be done in useEffect, NOT in the component body — assigning .current during render
+  // causes React to see different hook inputs on each render, triggering the
+  // "Cannot update a component while rendering" / "areHookInputsEqual" cascade.
+  const allModelsRef = useRef(allModels)
+  useEffect(() => {
+    allModelsRef.current = allModels
+  }, [allModels])
 
   // 联网搜索：默认关闭，仅在用户在 ChatInput 中主动开启时才把 web_search 工具挂到模型。
-  // 需要后端 /api/search/keys 验证用户是否配置了 SearchApiKey（webSearchAvailable）。
+  // webSearchAvailable 由下文的 searchKeysQuery 派生。
   const [webSearch, setWebSearch] = useState(false)
-  const [webSearchAvailable, setWebSearchAvailable] = useState(false)
   // 当前联网搜索引擎（来自共享 store）
   const searchEngine = useChatStore((s) => s.searchEngine)
-  useEffect(() => {
-    fetch('/api/search/keys')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data: Array<{ engine: string }>) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setWebSearchAvailable(true)
-        } else {
-          setWebSearchAvailable(false)
-        }
-      })
-      .catch(() => setWebSearchAvailable(false))
-  }, [])
+
+  // 联网搜索可用性:由 /api/search/keys 返回的 key 数量决定。
+  // 用 useQuery 接管,与全站 queryKeys 体系对齐。
+  const searchKeysQuery = useQuery<Array<{ engine: string }>>({
+    queryKey: queryKeys.search.keys(),
+    queryFn: () =>
+      fetchJson<Array<{ engine: string }>>('/api/search/keys', {
+        // 401 时返回空数组而不是抛错——聊天页允许用户无 key 也能进入
+        swallowNotFound: true,
+      }).then((data) => (Array.isArray(data) ? data : [])),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: STALE.providers,
+  })
+  const webSearchAvailable = (searchKeysQuery.data?.length ?? 0) > 0
 
   // 从 localStorage 恢复 webSearch 偏好
   useEffect(() => {
@@ -111,39 +141,56 @@ export function ChatPanel({
     }
   }, [initialConversationId])
   
-  // Sync deepThink state with model changes - auto-enable for reasoning models
+  // Sync deepThink state with model changes - auto-enable for reasoning models (only if user hasn't manually toggled)
+  // NOTE: deepThink NOT in dep array — we only want to react to currentModel changes,
+  // not to deepThink itself changing (which would cause an infinite loop).
+  // allModels is read via ref to avoid the same problem.
   useEffect(() => {
-    if (currentModel && !deepThink) {
-      const modelDef = allModels.find(m => m.id === currentModel)
-      if (modelDef?.supportsReasoning) {
+    if (currentModel && !userToggledDeepThink.current) {
+      const modelDef = allModelsRef.current.find(m => m.id === currentModel)
+      if (modelDef?.supportsReasoning && !deepThink) {
         setDeepThink(true)
       }
     }
-  }, [currentModel, deepThink, allModels])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentModel])
 
-  // Fetch custom models and merge with builtin
-  const [mergedModels, setMergedModels] = useState<ModelDefinition[]>(() => allModels)
-  
-  useEffect(() => {
-    if (!initialConversationId) {
-      // new chat: fetch custom models and merge
-      let cancelled = false
-      fetch('/api/custom-models')
-        .then((r) => r.json())
-        .then((custom: ModelDefinition[]) => {
-          if (!cancelled && custom.length > 0) {
-            setMergedModels([...allModels, ...custom])
-          } else {
-            setMergedModels(allModels)
-          }
-        })
-        .catch(() => { setMergedModels(allModels) })
-      return () => { cancelled = true }
-    } else {
-      // existing chat: use provided allModels (already includes custom from server side if needed)
-      setMergedModels(allModels)
+  // 合并 builtin + custom + provider-user 模型。复用全站 queryKey 的缓存。
+  const customModelsQuery = useQuery<ModelDefinition[]>({
+    queryKey: queryKeys.customModels(),
+    queryFn: () =>
+      fetchJson<ModelDefinition[] | { items?: ModelDefinition[] }>(
+        '/api/custom-models'
+      ).then((data) => (Array.isArray(data) ? data : data?.items ?? [])),
+    enabled: !initialConversationId,
+    staleTime: STALE.customModels,
+  })
+  const providerUserModelsQuery = useQuery<ModelDefinition[]>({
+    queryKey: [...queryKeys.providers(), 'effective'],
+    queryFn: async () => {
+      const payload = await fetchJson<
+        Array<{ effectiveModels: ModelDefinition[] }> | { providers: Array<{ effectiveModels: ModelDefinition[] }> }
+      >('/api/providers')
+      const list = Array.isArray(payload) ? payload : payload.providers ?? []
+      return list.flatMap((p) => p.effectiveModels ?? [])
+    },
+    enabled: !initialConversationId,
+    staleTime: STALE.providers,
+  })
+
+  const mergedModels = useMemo(() => {
+    const custom = customModelsQuery.data ?? []
+    const providerUser = providerUserModelsQuery.data ?? []
+    if (custom.length === 0 && providerUser.length === 0) return allModels
+    const seen = new Set<string>()
+    const merged: ModelDefinition[] = []
+    for (const m of [...allModels, ...custom, ...providerUser]) {
+      if (seen.has(m.id)) continue
+      seen.add(m.id)
+      merged.push(m)
     }
-  }, [allModels, initialConversationId])
+    return merged
+  }, [allModels, customModelsQuery.data, providerUserModelsQuery.data])
 
   // 对比模式状态: 仅从 props 初始化(已有 compare 会话),新聊天的 localStorage 预设
   // 在挂载后加载,避免 SSR 水合不一致
@@ -212,56 +259,91 @@ export function ChatPanel({
   const attachmentsRef = useRef<Attachment[] | undefined>(undefined)
   // 消息区滚动容器(供 OutlineSidebar 做 scroll-spy / 平滑滚动)
   const [messagesScrollEl, setMessagesScrollEl] = useState<HTMLDivElement | null>(null)
-  const { setCurrentConversationId, setConversationTitle, bumpConversationVersion } = useChatStore()
+  const { setCurrentConversationId, setConversationTitle, bumpConversationVersion, pendingContinuation, setPendingContinuation, markConversationRead } = useChatStore()
 
-  // Notify store of current conversation (triggers Sidebar to refresh conversation list)
+  // 切换/挂载会话时:
+  //  - 通知 store(Sidebar 监听)
+  //  - 标记已读 + 3s 后再次标兜底(覆盖流式回复刚完成的情况)
+  //  - 卸载时清"接着说"残留
   useEffect(() => {
     setCurrentConversationId(initialConversationId ?? null)
     setConversationTitle(conversationTitle ?? null)
-  }, [initialConversationId, conversationTitle, setCurrentConversationId, setConversationTitle])
+    if (initialConversationId) {
+      markConversationRead(initialConversationId)
+      const t = setTimeout(() => markConversationRead(initialConversationId), 3000)
+      return () => clearTimeout(t)
+    }
+  }, [initialConversationId, conversationTitle, setCurrentConversationId, setConversationTitle, markConversationRead])
+
+  // 切换会话时清掉"接着说"横幅(避免上一个会话的提示残留)
+  useEffect(() => {
+    return () => setPendingContinuation(null)
+  }, [initialConversationId, setPendingContinuation])
 
   // Keep ref in sync
   conversationIdRef.current = conversationId
 
-  // Create transport with current model, conversationId, deepThink, and webSearch
-  const transport = new DefaultChatTransport<UIMessage>({
-    api: '/api/chat',
-    body: {
-      model: currentModel,
-      conversationId: conversationId,
-      deepThink,
-      webSearch,
-      searchEngine,
-      styleOffset: conversationStyleOffset,
-      // Attachments are read from ref at send time
-      get attachments() {
-        return attachmentsRef.current
-      },
-    },
-    // Intercept response to capture conversation ID from header
-    fetch: async (url, options) => {
-      const response = await fetch(url, options)
-      const newConvId = response.headers.get('X-Conversation-Id')
-      const newConvTitle = response.headers.get('X-Conversation-Title')
-      if (newConvId && newConvId !== conversationIdRef.current) {
-        conversationIdRef.current = newConvId
-        setConversationId(newConvId)
-        setCurrentConversationId(newConvId)
-        bumpConversationVersion() // 新会话已入库,通知侧边栏刷新列表
-        if (newConvTitle) {
-          setConversationTitle(decodeURIComponent(newConvTitle))
-        }
-        // Update URL without full navigation
-        window.history.replaceState(null, '', `/chat/c/${newConvId}`)
-      }
-      return response
-    },
-  })
+  // 用 ref 持有最新的可变值,避免 transport body 闭包捕获旧值。
+  // 即使 useChat 内部缓存了 transport,body getter 在请求时才读取,
+  // 也能拿到最新的 model / deepThink / webSearch 等。
+  const currentModelRef = useRef(currentModel)
+  currentModelRef.current = currentModel
+  const deepThinkRef = useRef(deepThink)
+  deepThinkRef.current = deepThink
+  const webSearchRef = useRef(webSearch)
+  webSearchRef.current = webSearch
+  const searchEngineRef = useRef(searchEngine)
+  searchEngineRef.current = searchEngine
+  const conversationStylePresetRef = useRef(conversationStylePreset)
+  conversationStylePresetRef.current = conversationStylePreset
+
+  // Create transport with current model, conversationId, deepThink, and webSearch.
+  // 用 useMemo 收敛创建;所有可变值都通过 getter 读 ref,保证请求时拿到最新值。
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<UIMessage>({
+        api: '/api/chat',
+        body: {
+          get model() { return currentModelRef.current },
+          get conversationId() { return conversationIdRef.current },
+          get deepThink() { return deepThinkRef.current },
+          get webSearch() { return webSearchRef.current },
+          get searchEngine() { return searchEngineRef.current },
+          get stylePreset() { return conversationStylePresetRef.current },
+          // Attachments are read from ref at send time
+          get attachments() {
+            return attachmentsRef.current
+          },
+        },
+        // Intercept response to capture conversation ID from header
+        fetch: async (url, options) => {
+          const response = await fetch(url, options)
+          const newConvId = response.headers.get('X-Conversation-Id')
+          const newConvTitle = response.headers.get('X-Conversation-Title')
+          if (newConvId && newConvId !== conversationIdRef.current) {
+            conversationIdRef.current = newConvId
+            setConversationId(newConvId)
+            setCurrentConversationId(newConvId)
+            bumpConversationVersion() // 新会话已入库,通知侧边栏刷新列表
+            if (newConvTitle) {
+              setConversationTitle(decodeURIComponent(newConvTitle))
+            }
+            // Update URL without full navigation
+            window.history.replaceState(null, '', `/chat/c/${newConvId}`)
+          }
+          return response
+        },
+      }),
+    // transport 内部所有运行时值都通过 ref 读取最新值,
+    // 这里只依赖稳定的 store setter(来自 zustand,引用恒定),避免 transport 被频繁重建
+    [setConversationId, setCurrentConversationId, setConversationTitle, bumpConversationVersion]
+  )
 
   // Ref to setMessages,避免在 useChat 初始化器内部自引用导致循环依赖
   const setMessagesRef = useRef<((updater: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void) | null>(null)
 
   const { messages, sendMessage, setMessages, stop, status, error, clearError, regenerate } = useChat<UIMessage>({
+    ...(initialConversationId ? { id: initialConversationId } : {}), // 用会话 ID 作为 useChat 实例 id(仅已有会话),避免不同会话复用同一组件时状态错乱
     transport,
     messages: initialMessages,
     onFinish: async ({ message, isError, isAbort }) => {
@@ -276,6 +358,8 @@ export function ChatPanel({
         const data = await res.json()
         const latest = data.messages?.[0]
         if (!latest || latest.role !== "assistant" || typeof latest.content !== "string") return
+        // 服务端 onFinish 已更新 conversation.updatedAt,通知 Sidebar 刷新列表(更新未读/排序)
+        bumpConversationVersion()
         setMessagesRef.current?.((prev: UIMessage[]) =>
           prev.map((m) => {
             if (m.id !== message.id) return m
@@ -293,48 +377,108 @@ export function ChatPanel({
         )
       } catch (err) {
         console.error("Failed to sync final message content:", err)
+        toast.error('同步最终回复失败', {
+          title: '提示',
+        })
       }
     },
   })
 
-  // Keep ref in sync with latest setMessages
+  // setMessages 引用稳定(来自 useChat),挂到 ref 上供 onFinish 内的最终内容同步使用
   setMessagesRef.current = setMessages
 
-  // 发送后把附件挂到最后一条用户消息上,保证当前会话中即时展示(与服务端落库一致)
+  const isLoading = status === 'submitted' || status === 'streaming'
+
+  // 生成开始时(stop → send 或 regenerate)清掉"接着说"横幅
+  const prevStatusRef = useRef(status)
   useEffect(() => {
-    const atts = attachmentsRef.current
-    if (!atts || atts.length === 0) return
+    const prev = prevStatusRef.current
+    prevStatusRef.current = status
+    // 'ready' → 'submitted'/'streaming' 表示新一轮开始,清掉横幅
+    if (prev === 'ready' && status !== 'ready' && pendingContinuation) {
+      setPendingContinuation(null)
+    }
+  }, [status, pendingContinuation, setPendingContinuation])
+
+  // 发送时把附件注入到最后一条用户消息(附件在发送前已写入 attachmentsRef,
+  // 这里用 setMessages 把它补到 UI 消息上,让用户立即看到预览)。
+  // 不走 useEffect 依赖 messages,避免 setMessages → 新 messages → effect 再跑 的死循环。
+  const attachPendingToLastUserMessage = useCallback((attachments: Attachment[]) => {
     setMessages((prev) => {
       const next = [...prev]
       for (let i = next.length - 1; i >= 0; i--) {
         if (next[i].role === 'user') {
-          next[i] = { ...next[i], attachments: atts } as UIMessage
+          next[i] = { ...next[i], attachments } as UIMessage
           break
         }
       }
       return next
     })
-    attachmentsRef.current = undefined
-  }, [messages, setMessages])
-
-  const isLoading = status === 'submitted' || status === 'streaming'
+  }, [setMessages])
 
   const handleSend = useCallback(
     (text: string, attachments?: Attachment[]) => {
       attachmentsRef.current = attachments
+      if (attachments && attachments.length > 0) {
+        attachPendingToLastUserMessage(attachments)
+      }
       sendMessage({ text })
       // Clear after send so it's not included in subsequent messages
       attachmentsRef.current = undefined
     },
-    [sendMessage]
+    [sendMessage, attachPendingToLastUserMessage]
   )
 
   const handleStop = useCallback(() => {
+    // 在真正停止前,记录最后一条 assistant 文本到 store,
+    // 让 ChatInput 顶部能展示"接着说"横幅。
+    // 注意:messages 引用是 closure 捕获的,所以这里读到的可能不是最新;
+    // 但 useChat 的 messages 与 status 同步更新,这里是在同一个 setState 周期内调用,
+    // 用户的"点 stop"通常会先让 status → 'ready',messages 也是最新的。
+    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+    const lastText = lastAssistant
+      ? lastAssistant.parts
+          .filter((p) => p.type === 'text')
+          .map((p) => p.text)
+          .join('')
+          .trim()
+      : ''
+    if (lastText) {
+      setPendingContinuation({
+        conversationId: conversationIdRef.current ?? null,
+        text: lastText,
+        modelId: currentModel,
+      })
+    } else {
+      setPendingContinuation(null)
+    }
     stop()
-  }, [stop])
+  }, [stop, messages, currentModel, setPendingContinuation])
+
+  /**
+   * 「接着说」:把停下来的最后一段作为上下文,发送一条提示让模型接着输出。
+   * 与 regenerate() 不同,这里不会替换已有内容,而是新增一轮对话。
+   */
+  const handleContinue = useCallback(() => {
+    const pending = pendingContinuation
+    if (!pending || !pending.text) {
+      setPendingContinuation(null)
+      return
+    }
+    const tail = pending.text.slice(-200).replace(/\s+/g, ' ').trim()
+    const prompt = `接着你刚才未完成的内容继续输出，从"${tail.slice(-50)}"之后开始。不要重复之前已经写过的部分。`
+    attachmentsRef.current = undefined
+    sendMessage({ text: prompt })
+    setPendingContinuation(null)
+  }, [pendingContinuation, sendMessage, setPendingContinuation])
+
+  const dismissContinuation = useCallback(() => {
+    setPendingContinuation(null)
+  }, [setPendingContinuation])
 
   const handleModelChange = useCallback((modelId: string) => {
     setCurrentModel(modelId)
+    userToggledDeepThink.current = false // Reset on model change to allow auto-enable
     // Persist to localStorage for new chats to pick up
     localStorage.setItem(MODEL_STORAGE_KEY, modelId)
     // Persist to DB for existing conversations
@@ -344,12 +488,16 @@ export function ChatPanel({
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: modelId }),
-      }).catch((err) => console.error('Failed to persist model:', err))
+      }).catch((err) => {
+        console.error('Failed to persist model:', err)
+        toast.error('模型选择保存失败,刷新后会重置', { title: '注意' })
+      })
     }
   }, [])
 
   const handleDeepThinkChange = useCallback((enabled: boolean) => {
     setDeepThink(enabled)
+    userToggledDeepThink.current = true // Mark as manually toggled
     localStorage.setItem(DEEP_THINK_STORAGE_KEY, String(enabled))
   }, [])
 
@@ -380,6 +528,7 @@ export function ChatPanel({
           )
         } catch (err) {
           console.error('Failed to delete old messages:', err)
+          toast.error('编辑失败:无法清理旧消息', { title: '编辑消息' })
         }
       }
 
@@ -395,7 +544,25 @@ export function ChatPanel({
     [messages, setMessages, sendMessage]
   )
 
-  const errorInfo = error ? getErrorMessage(error) : null
+  const errorInfo = useMemo(
+    () => (error ? getErrorMessage(error) : null),
+    [error]
+  )
+
+  // 错误出现时同步弹一个 toast 通知用户
+  // (红色横幅是持久 UI,toast 是瞬时提醒 —— 两者互补)
+  const lastErrorRef = useRef<unknown>(null)
+  useEffect(() => {
+    if (error && error !== lastErrorRef.current) {
+      lastErrorRef.current = error
+      toast.error(errorInfo?.message ?? '请求失败,请重试', {
+        title: errorInfo?.type === 'api_key' ? '缺少 API Key' : '请求失败',
+        timeout: 6000,
+      })
+    } else if (!error) {
+      lastErrorRef.current = null
+    }
+  }, [error, errorInfo])
 
   // 对比模式: 渲染并排泳道视图(key 确保模型列表变化时重建泳道)
   if (compareMode) {
@@ -406,7 +573,7 @@ export function ChatPanel({
         initialLaneMessages={laneInitialMessages ?? compareModels.map(() => [])}
         initialCompareModels={compareModels}
         allModels={mergedModels}
-        styleOffset={conversationStyleOffset}
+        stylePreset={conversationStylePreset}
         deepThink={deepThink}
         onDeepThinkChange={handleDeepThinkChange}
         webSearch={webSearch}
@@ -472,30 +639,10 @@ export function ChatPanel({
         </div>
       )}
 
-      {/* Messages area */}
-      <div
-        ref={setMessagesScrollEl}
-        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
-      >
-        <div className="flex min-h-full">
-          <MessageList
-            messages={messages}
-            isStreaming={isLoading}
-            className="min-h-full flex-1"
-            onRegenerate={handleRegenerate}
-            onEditMessage={handleEditMessage}
-            models={mergedModels}
-            selectedModel={currentModel}
-            onModelChange={handleModelChange}
-            onSend={handleSend}
-          />
-          <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
-        </div>
-      </div>
-
-      {/* Input area - fixed at bottom (空状态时隐藏,改由 MessageList 中央的输入框接管) */}
-      {messages.length > 0 && (
+      {/* Messages area 或 欢迎态输入区(messages.length === 0 时由 ChatInput 自己居中渲染) */}
+      {messages.length === 0 ? (
         <ChatInput
+          variant="welcome"
           onSend={handleSend}
           onStop={handleStop}
           isLoading={isLoading}
@@ -507,10 +654,62 @@ export function ChatPanel({
           webSearch={webSearch}
           onWebSearchChange={handleWebSearchChange}
           webSearchAvailable={webSearchAvailable}
-          compareMode={false}
-          compareModeAvailable={!conversationId}
-          onCompareModeChange={handleCompareModeChange}
+          welcomeHeader={(
+            <div className="text-center mb-8">
+              <h2
+                className="text-content-primary"
+                style={{
+                  fontFamily: "'PingFang Ultralight', 'PingFang SC', -apple-system, BlinkMacSystemFont, sans-serif",
+                  fontWeight: 100,
+                  fontSize: '32px',
+                  lineHeight: 1.2,
+                  letterSpacing: '0.02em',
+                }}
+              >
+                {getGreeting()}，今天能为你做些什么？
+              </h2>
+            </div>
+          )}
         />
+      ) : (
+        <>
+          <div
+            ref={setMessagesScrollEl}
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scroll-contain"
+          >
+            <div className="flex min-h-full">
+              <MessageList
+                messages={messages}
+                isStreaming={isLoading}
+                className="min-h-full flex-1"
+                onRegenerate={handleRegenerate}
+                onEditMessage={handleEditMessage}
+              />
+              <OutlineSidebar messages={messages} scrollContainer={messagesScrollEl} />
+            </div>
+          </div>
+
+          {/* Input area - fixed at bottom */}
+          <ChatInput
+            onSend={handleSend}
+            onStop={handleStop}
+            isLoading={isLoading}
+            models={mergedModels}
+            selectedModel={currentModel}
+            onModelChange={handleModelChange}
+            deepThink={deepThink}
+            onDeepThinkChange={handleDeepThinkChange}
+            webSearch={webSearch}
+            onWebSearchChange={handleWebSearchChange}
+            webSearchAvailable={webSearchAvailable}
+            compareMode={false}
+            compareModeAvailable={!conversationId}
+            onCompareModeChange={handleCompareModeChange}
+            pendingContinuationExists={!!pendingContinuation}
+            onContinue={handleContinue}
+            onDismissContinuation={dismissContinuation}
+          />
+        </>
       )}
 
       {/* Right preview panel (desktop) */}

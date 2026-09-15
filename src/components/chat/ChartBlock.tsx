@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import { AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -155,7 +155,6 @@ export function ChartBlock({ code, className }: ChartBlockProps) {
             <XAxis dataKey={config.xKey} tick={{ fontSize: 11 }} stroke={axisStroke} />
             <YAxis tick={{ fontSize: 11 }} stroke={axisStroke} />
             <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, background: tooltipBg, borderColor: tooltipBorder }} />
-            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: legendColor }} />}
             {yKeys.map((key, i) => (
               <Line
                 key={key}
@@ -175,7 +174,6 @@ export function ChartBlock({ code, className }: ChartBlockProps) {
             <XAxis dataKey={config.xKey} tick={{ fontSize: 11 }} stroke={axisStroke} />
             <YAxis tick={{ fontSize: 11 }} stroke={axisStroke} />
             <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, background: tooltipBg, borderColor: tooltipBorder }} />
-            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: legendColor }} />}
             {yKeys.map((key, i) => (
               <Bar key={key} dataKey={key} fill={colors[i % colors.length]} radius={[4, 4, 0, 0]} />
             ))}
@@ -218,7 +216,6 @@ export function ChartBlock({ code, className }: ChartBlockProps) {
             <XAxis dataKey={config.xKey} tick={{ fontSize: 11 }} stroke={axisStroke} />
             <YAxis tick={{ fontSize: 11 }} stroke={axisStroke} />
             <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, background: tooltipBg, borderColor: tooltipBorder }} />
-            {yKeys.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: legendColor }} />}
             {yKeys.map((key, i) => (
               <Area
                 key={key}
@@ -245,6 +242,27 @@ export function ChartBlock({ code, className }: ChartBlockProps) {
           <ResponsiveContainer width="100%" height={300}>
             {renderChart() as React.ReactElement}
           </ResponsiveContainer>
+          {/* 自绘图例:替代 recharts <Legend>。
+              recharts v3 issue #5996:同一页面出现两个带 Legend 的图表时,
+              其内部 store 与 useSyncExternalStore 相互触发,造成
+              "Maximum update depth exceeded" 无限循环,故不使用其 Legend 组件. */}
+          {yKeys.length > 1 && (
+            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 mt-2">
+              {yKeys.map((key, i) => (
+                <span
+                  key={key}
+                  className="flex items-center gap-1.5 text-[11px]"
+                  style={{ color: legendColor }}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: colors[i % colors.length] }}
+                  />
+                  {key}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
